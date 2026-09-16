@@ -12,6 +12,7 @@ ITERATIONS_DIR = Path("iterations")
 DATA_DIR = Path("data/minute_aggs")
 DAILY_DATA_DIR = Path("data/daily_aggs")
 NEWS_DIR = Path("data/news")
+EARNINGS_DIR = Path("data/earnings")
 SRC_DIR = Path(__file__).resolve().parents[1]
 SUBPROCESS_TIMEOUT_SECONDS = 3600
 
@@ -31,6 +32,7 @@ def run_iteration(
     holdout_months: int = 0,
     data_dir: Path = DATA_DIR,
     news_dir: Path | None = None,
+    earnings_dir: Path | None = None,
 ) -> tuple[bool, str]:
     iteration_id = iteration_id or make_iteration_id(ticker)
     output_dir = ITERATIONS_DIR / iteration_id
@@ -59,6 +61,8 @@ def run_iteration(
     ]
     if news_dir is not None:
         cmd += ["--news-dir", str(news_dir)]
+    if earnings_dir is not None:
+        cmd += ["--earnings-dir", str(earnings_dir)]
 
     env = {**os.environ, "PYTHONPATH": str(SRC_DIR)}
 

@@ -9,6 +9,7 @@ REFERENCE_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_mo
 REFERENCE_SWING_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_swing_model.py"
 REFERENCE_DAYTRADE_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_daytrade_model.py"
 REFERENCE_OVERNIGHT_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_overnight_model.py"
+REFERENCE_EARNINGS_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_earnings_model.py"
 DEFAULT_MODEL = "sonnet"
 CLAUDE_TIMEOUT_SECONDS = 600
 
@@ -19,6 +20,7 @@ CONTRACT_VERSION = "v7-sentiment"
 CONTRACT_VERSION_SWING = "v1-swing"
 CONTRACT_VERSION_DAYTRADE = "v1-daytrade"
 CONTRACT_VERSION_OVERNIGHT = "v1-overnight"
+CONTRACT_VERSION_EARNINGS = "v1-earnings"
 
 CONTRACT_TEMPLATE = """You are an ML engineering agent for an intraday equity signal-prediction system. You do not predict the market yourself — you write the Python code for a traditional ML model (feature engineering, model choice, hyperparameters) that a deterministic harness will train and walk-forward test. A trained model does the actual predicting; your job is the code.
 
@@ -183,6 +185,53 @@ Respond with ONLY the complete Python script, in a single fenced python code blo
 """
 
 
+CONTRACT_TEMPLATE_EARNINGS = """You are an ML engineering agent for a POST-EARNINGS-ANNOUNCEMENT-DRIFT (PEAD) equity signal-prediction system. You do not predict the market yourself — you write the Python code for a traditional ML model (feature engineering, model choice, hyperparameters) that a deterministic harness will train and walk-forward test. A trained model does the actual predicting; your job is the code.
+
+This style is fundamentally different from other styles: the unit of analysis is one row per EARNINGS EVENT (roughly 4/ticker/year), not one row per trading day — far sparser than daily bars. To have enough data to train/validate on, events from MULTIPLE TICKERS are POOLED into a single training set; you will receive a comma-separated list of tickers via --ticker (e.g. "AAPL,MSFT,NVDA"), not a single ticker.
+
+The trade: enter at the REACTION-DAY CLOSE — the first close after the earnings report is public (same day if reported before market open (BMO), next trading day if reported after market close (AMC)) — hold for a fixed number of trading days, exit at close. Every feature must be knowable by that reaction-day close: the reported EPS surprise is public, and so is the full reaction-day bar (gap, reaction move, volume). The only forward-looking piece is the label itself (the forward return over the holding period) — this is the classic, well-documented PEAD anomaly: stocks that beat estimates tend to keep drifting up over the following 1-2 weeks, misses keep drifting down.
+
+Write a single self-contained Python script that:
+
+1. Accepts these CLI arguments: --data-dir --earnings-dir --ticker (comma-separated) --train-months --predict-months --gap-days --output-dir --holdout-months (default 0, int)
+2. Loads OHLCV DAILY-bar data for EACH ticker in the comma-separated list from a CSV at <data-dir>/<ticker>.csv with columns: timestamp (epoch ms, midnight of the trading day), open, high, low, close, volume, vwap, transactions — one row per trading day.
+3. Loads earnings-event data for EACH ticker from a CSV at <earnings-dir>/<ticker>.csv with columns: earnings_date (YYYY-MM-DD), report_time ("BMO" or "AMC"), eps_estimate, eps_reported, surprise_pct (percent, e.g. 4.5 = beat estimate by 4.5%). Handle a missing file gracefully (empty DataFrame; that ticker just contributes 0 events).
+4. For EACH ticker, build one row per usable earnings event:
+   - Determine the reaction-day index into that ticker's own price series: if report_time is "BMO" and earnings_date is itself a trading day, the reaction day IS earnings_date; otherwise (AMC, or a BMO date that wasn't a trading day) the reaction day is the NEXT trading day. Skip an event if there isn't enough price history before it (for pre-earnings features) or after it (for the forward-looking label).
+   - CRITICAL leakage-safety discipline for this style, different from the bar-based styles: compute each event's features/label from THAT TICKER's OWN full price series in a small window around THAT EVENT's own reaction-day index — this is inherently local to the event and cannot leak information from other events or other tickers. Only AFTER building this per-event EVENTS TABLE do you filter it by reaction_date into [window_start, window_end) for train/predict slicing — never slice the raw price bars by the window first and then try to compute event features from the truncated slice, since a pre-earnings run-up or the forward-looking label needs price bars outside a tight window around the window boundary.
+   - Legitimate features (all knowable by reaction-day close): `surprise_pct` from the earnings data; `gap_return = reaction_open / prior_close - 1`; `reaction_return = reaction_close / prior_close - 1` (the day's own initial reaction); a pre-earnings run-up (e.g. `prior_close / close[N days before] - 1`); a reaction-day volume z-score vs a recent trailing average. Feel free to add your own, as long as each is computable using only that ticker's bars up to and including the reaction day.
+   - The LABEL is the forward return from the reaction-day close over a fixed holding period (e.g. 5-15 trading days) — this is fine as a training TARGET, never used as a feature.
+   - Concatenate all tickers' per-event rows into one combined EVENTS TABLE (with a `ticker` column), sorted by reaction_date.
+5. Computes `end = full_data_max_date - 30*holdout_months days` (via `datetime.timedelta`), where `full_data_max_date` is the EARLIEST of the per-ticker price data's max dates (so every pooled ticker has data through `end`). Uses `wfo.windows.walk_forward_windows(start, end, train_months, predict_months, gap_days)` (already importable, do not reimplement) to generate windows, where `start` is the LATEST of the per-ticker price data's min dates. `--holdout-months` exists so a trailing slice of history can be reserved during search, then revealed later via `--holdout-months 0` as a genuine blind test.
+6. For EACH window:
+   - Slice the EVENTS TABLE (not the raw price bars) to reaction_date in [train_start, train_end) and [predict_start, predict_end)
+   - Skip windows with too few EVENTS rather than erroring — this style is data-thin, so use generous-but-sane minimums (e.g. ~20+ train events, ~5+ predict events pooled across all tickers), not a minimum meant for daily-bar row counts.
+   - Train a model (any scikit-learn-compatible estimator) on the train events
+   - Predict/backtest on the predict events
+   - Compute f1, accuracy, roi, max_drawdown for that window.
+   - Also compute `net_roi`: same backtest with a flat $1 brokerage commission per ACTUAL trade (nonzero position), against an assumed $10,000 starting capital (`STARTING_CAPITAL_USD = 10_000`, `COMMISSION_PER_TRADE_USD = 1.0`): `capital = capital * (1 + trade_return) - (COMMISSION_PER_TRADE_USD if position != 0 else 0)`, then `net_roi = capital / STARTING_CAPITAL_USD - 1`.
+   - Also compute `num_trades`: count of events where an actual (nonzero) position was taken.
+   - Support an optional `long_only` behavior: module-level `LONG_ONLY = False` (default), set to `True` and applied via `max(position, 0)` clipping only when explicitly instructed.
+   - NO OVERLAP HANDLING NEEDED beyond sorting by reaction_date: each event is already one independent, non-overlapping trade. Events from different tickers can fall on overlapping calendar dates — for simplicity, like the other styles here, assume one full-capital position taken at a time, compounded sequentially in reaction_date order (not a real simultaneous multi-position portfolio allocation). Do not import wfo.timeutils (not applicable here).
+   - Also compute `buy_hold_roi` for that window: the EQUAL-WEIGHTED AVERAGE plain buy-and-hold return across the pooled tickers over the SAME predict calendar period, using each ticker's raw (unfiltered) close prices — this is the closest analogue of "do nothing" for a multi-ticker strategy.
+   - Save the fitted model's weights to `<output-dir>/window_<index>_weights.pkl` (pickle)
+   - Save a backtest ledger (per-row: ticker, reaction_date, future_return, predicted, strategy_return, equity) to `<output-dir>/window_<index>_ledger.csv`
+7. Uses `wfo.schema.WindowResult`, `wfo.schema.IterationResults`, and `wfo.schema.write_results` (already importable) to assemble and write `<output-dir>/results.json` — do not redefine this schema yourself. Set `IterationResults.ticker` to the comma-joined ticker list you were given (e.g. "AAPL,MSFT,NVDA").
+8. Sets `prediction_target` to a short string describing exactly what you're predicting (e.g. "pead_forward_return_above_0_in_10days_pooled"). You choose the exact holding period and threshold based on the instructions you're given.
+8b. Sets `approach` to a single sentence naming your model type, feature set, holding period, and that it's pooled across tickers.
+9. Must run standalone via `python script.py <args>` with `wfo` importable from PYTHONPATH.
+10. Must not make any network calls, must not use subprocess/os.system/eval/exec, and must not read or write any path outside --data-dir/--earnings-dir (read-only) and --output-dir (write). A separate safety reviewer checks for this before the script is ever run — any violation gets it rejected outright.
+
+Here is a working reference implementation of this exact contract (a deliberately simple baseline). Follow its structure faithfully — the per-ticker-then-pool event construction, the "compute from own price series, then slice the events table" leakage discipline, output file layout — but come up with your OWN feature engineering, model choice, holding period, and prediction framing per the instructions you are given. Do not just copy this one.
+
+```python
+{reference_source}
+```
+
+Respond with ONLY the complete Python script, in a single fenced python code block. No explanation before or after.
+"""
+
+
 def _build_system_prompt(style: str = "intraday") -> str:
     if style == "swing":
         reference_source = REFERENCE_SWING_MODEL_PATH.read_text()
@@ -193,6 +242,9 @@ def _build_system_prompt(style: str = "intraday") -> str:
     if style == "overnight":
         reference_source = REFERENCE_OVERNIGHT_MODEL_PATH.read_text()
         return CONTRACT_TEMPLATE_OVERNIGHT.format(reference_source=reference_source)
+    if style == "earnings":
+        reference_source = REFERENCE_EARNINGS_MODEL_PATH.read_text()
+        return CONTRACT_TEMPLATE_EARNINGS.format(reference_source=reference_source)
     reference_source = REFERENCE_MODEL_PATH.read_text()
     return CONTRACT_TEMPLATE.format(reference_source=reference_source)
 
@@ -249,7 +301,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("instructions")
     parser.add_argument("--tag", default=None)
-    parser.add_argument("--style", choices=["intraday", "swing", "daytrade", "overnight"], default="intraday")
+    parser.add_argument("--style", choices=["intraday", "swing", "daytrade", "overnight", "earnings"], default="intraday")
     args = parser.parse_args()
 
     path = generate_model_script(args.instructions, args.tag, style=args.style)

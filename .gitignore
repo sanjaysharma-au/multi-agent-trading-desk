@@ -12,3 +12,5 @@ iterations/
 generated_models/
 reports/
 *.log
+
+.claude/scheduled_tasks.lock

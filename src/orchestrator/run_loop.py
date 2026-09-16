@@ -7,11 +7,12 @@ from pathlib import Path
 from agents.model_designer import (
     CONTRACT_VERSION,
     CONTRACT_VERSION_DAYTRADE,
+    CONTRACT_VERSION_EARNINGS,
     CONTRACT_VERSION_OVERNIGHT,
     CONTRACT_VERSION_SWING,
     generate_model_script,
 )
-from wfo.run_iteration import DAILY_DATA_DIR, DATA_DIR, ITERATIONS_DIR, NEWS_DIR, run_iteration
+from wfo.run_iteration import DAILY_DATA_DIR, DATA_DIR, EARNINGS_DIR, ITERATIONS_DIR, NEWS_DIR, run_iteration
 from wfo.schema import IterationResults, load_results
 
 MAX_ITERATIONS = 10
@@ -23,6 +24,7 @@ TARGET_MAX_TRADES_PER_MONTH = 100
 TARGET_MAX_TRADES_PER_MONTH_SWING = 15
 TARGET_MAX_TRADES_PER_MONTH_DAYTRADE = 21
 TARGET_MAX_TRADES_PER_MONTH_OVERNIGHT = 21
+TARGET_MAX_TRADES_PER_MONTH_EARNINGS = 10
 
 
 def chain_roi(period_rois: list[float]) -> float:
@@ -113,6 +115,7 @@ def build_instructions(
         "swing": TARGET_MAX_TRADES_PER_MONTH_SWING,
         "daytrade": TARGET_MAX_TRADES_PER_MONTH_DAYTRADE,
         "overnight": TARGET_MAX_TRADES_PER_MONTH_OVERNIGHT,
+        "earnings": TARGET_MAX_TRADES_PER_MONTH_EARNINGS,
     }.get(style, TARGET_MAX_TRADES_PER_MONTH)
     style_desc = {
         "swing": "swing-trading daily-bar signal prediction (positions held days to a couple of weeks)",
@@ -120,6 +123,9 @@ def build_instructions(
                     "always exit at that same day's close, no overnight holding",
         "overnight": "overnight (close-to-open) daily-bar signal prediction — decide at today's close, "
                      "always exit at the next day's open, holding overnight",
+        "earnings": "post-earnings-announcement-drift (PEAD) signal prediction, pooled across multiple "
+                    "tickers' earnings events — decide at the reaction-day close (first close after the "
+                    "report is public), hold for a fixed number of trading days",
     }.get(style, "intraday minute-bar signal prediction")
 
     failure_warning = ""
@@ -256,15 +262,19 @@ def run_loop(
         print("Independent mode: each iteration is a fresh, unguided design — no feedback from "
               "prior attempts, to avoid adaptively curve-fitting to this specific dataset.")
 
-    data_dir = DAILY_DATA_DIR if style in ("swing", "daytrade", "overnight") else DATA_DIR
+    data_dir = DAILY_DATA_DIR if style in ("swing", "daytrade", "overnight", "earnings") else DATA_DIR
     contract_version = {
         "swing": CONTRACT_VERSION_SWING,
         "daytrade": CONTRACT_VERSION_DAYTRADE,
         "overnight": CONTRACT_VERSION_OVERNIGHT,
+        "earnings": CONTRACT_VERSION_EARNINGS,
     }.get(style, CONTRACT_VERSION)
 
     print(f"Style: {style}  (data dir: {data_dir})")
-    print(f"Rotating search tickers: {', '.join(tickers)}")
+    if style == "earnings":
+        print(f"Pooled search tickers (every iteration uses all of them together): {', '.join(tickers)}")
+    else:
+        print(f"Rotating search tickers: {', '.join(tickers)}")
     if holdout_months:
         print(f"Also reserving the trailing {holdout_months} month(s) of each search ticker as a "
               "time-based blind holdout.")
@@ -275,7 +285,7 @@ def run_loop(
     last_failure = None
     tried_approaches: list[str] = []
     for i in range(1, max_iterations + 1):
-        ticker = tickers[(i - 1) % len(tickers)]
+        ticker = ",".join(tickers) if style == "earnings" else tickers[(i - 1) % len(tickers)]
         if independent:
             # Deliberately no PERFORMANCE feedback from prior iterations — each
             # design is unguided by results, so the search can't adaptively
@@ -292,7 +302,8 @@ def run_loop(
             instructions = build_instructions(
                 best_approach, best_diag, last_approach, last_diag, style=style, last_failure=last_failure
             )
-        tag = f"{run_id}_{ticker}_iter{i}"
+        tag_label = "POOLED" if style == "earnings" else ticker
+        tag = f"{run_id}_{tag_label}_iter{i}"
 
         try:
             script_path = generate_model_script(instructions, iteration_tag=tag, style=style)
@@ -305,6 +316,7 @@ def run_loop(
             script_path, ticker, train_months, predict_months, gap_days,
             iteration_id=tag, contract_version=contract_version, holdout_months=holdout_months,
             data_dir=data_dir, news_dir=NEWS_DIR if style == "intraday" else None,
+            earnings_dir=EARNINGS_DIR if style == "earnings" else None,
         )
         if not ok:
             last_failure = outcome
@@ -373,12 +385,12 @@ def _print_holdout_hint(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tickers", required=True, help="Comma-separated tickers to rotate through during search, e.g. AAPL,NVDA,AMZN")
+    parser.add_argument("--tickers", required=True, help="Comma-separated tickers to rotate through during search, e.g. AAPL,NVDA,AMZN (for --style earnings, these are POOLED together every iteration instead of rotated)")
     parser.add_argument("--holdout-tickers", default="", help="Comma-separated tickers to reserve entirely (never used in search), e.g. MSFT,SPY")
-    parser.add_argument("--style", choices=["intraday", "swing", "daytrade", "overnight"], default="intraday", help="intraday = minute bars, short horizons; swing = daily bars, multi-day holding periods; daytrade = daily bars, enter at open exit at close same day; overnight = daily bars, enter at close exit at next open")
-    parser.add_argument("--train-months", type=int, default=None, help="Defaults: 3 for intraday, 10 for swing/daytrade")
-    parser.add_argument("--predict-months", type=int, default=None, help="Defaults: 1 for intraday, 2 for swing/daytrade")
-    parser.add_argument("--gap-days", type=int, default=None, help="Defaults: 2 for intraday, 5 for swing/daytrade")
+    parser.add_argument("--style", choices=["intraday", "swing", "daytrade", "overnight", "earnings"], default="intraday", help="intraday = minute bars, short horizons; swing = daily bars, multi-day holding periods; daytrade = daily bars, enter at open exit at close same day; overnight = daily bars, enter at close exit at next open; earnings = post-earnings-drift, daily bars, events pooled across all --tickers")
+    parser.add_argument("--train-months", type=int, default=None, help="Defaults: 3 for intraday, 10 for swing/daytrade, 60 for earnings")
+    parser.add_argument("--predict-months", type=int, default=None, help="Defaults: 1 for intraday, 2 for swing/daytrade, 24 for earnings")
+    parser.add_argument("--gap-days", type=int, default=None, help="Defaults: 2 for intraday, 5 for swing/daytrade, 10 for earnings")
     parser.add_argument(
         "--holdout-months", type=int, default=0,
         help="Additionally reserve this many trailing months from every search ticker's WFO windows.",
@@ -401,7 +413,11 @@ def main():
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()]
     holdout_tickers = [t.strip() for t in args.holdout_tickers.split(",") if t.strip()]
 
-    if args.style in ("swing", "daytrade", "overnight"):
+    if args.style == "earnings":
+        train_months = args.train_months if args.train_months is not None else 60
+        predict_months = args.predict_months if args.predict_months is not None else 24
+        gap_days = args.gap_days if args.gap_days is not None else 10
+    elif args.style in ("swing", "daytrade", "overnight"):
         train_months = args.train_months if args.train_months is not None else 10
         predict_months = args.predict_months if args.predict_months is not None else 2
         gap_days = args.gap_days if args.gap_days is not None else 5
