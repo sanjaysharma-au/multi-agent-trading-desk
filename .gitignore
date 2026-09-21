@@ -11,6 +11,10 @@ data/
 iterations/
 generated_models/
 reports/
+earnings_call_analysis/
+earnings_call_trajectory/
+*_backup/
 *.log
 
 .claude/scheduled_tasks.lock
+.claude/settings.json

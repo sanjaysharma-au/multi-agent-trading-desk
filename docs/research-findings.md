@@ -6,6 +6,164 @@ re-spend time re-discovering the same dead end.
 
 ---
 
+## 2026-09-18 — Earnings-call trajectory tracking + stance/price-target tools
+
+**Reframing, after the ML-predictor idea above was falsified:** stop trying
+to make these transcripts predict returns statistically, and instead build
+decision-support tools for human speculation -- a quarter-over-quarter
+"is this company's guidance getting more or less honest" tracker, and a
+per-transcript bullish/neutral/bearish stance with a grounded price-move
+estimate. Neither claims statistical validity; both are meant to be read the
+way a human reads a sell-side analyst note.
+
+**Trajectory tool** (`src/agents/earnings_trajectory.py`,
+`src/research/{run_trajectory_batch,extract_trajectory_verdicts}.py`): feeds
+the PRIOR quarter's specific extracted guidance claims (from the existing
+guidance.md) alongside the CURRENT quarter's full transcript, and asks the
+model to check each prior claim as DELIVERED / MISSED / REVISED / NOT
+ADDRESSED, then issue an improving/stable/deteriorating verdict. This is
+fundamentally more trustworthy than a return-prediction score because it's
+checking a fact (was a specific promise kept), not forecasting anything.
+Spot-checked against the real Tesla Q2->Q3 2019 transition: correctly caught
+that management stopped mentioning its own 25-30% gross-margin target and its
+self-set "Battery Day" date (both prominent the prior quarter) rather than
+addressing either -- exactly the kind of quiet omission this tool is meant to
+surface, that a return-blind reader of the Q3 call alone would likely miss.
+
+**Ran across TSLA's full 39 consecutive quarter-pairs (2016-2026).** Tally:
+**23 deteriorating, 14 stable, only 2 improving** (both in 2018, right after
+the Model 3 "production hell" turnaround) -- and a live 6-quarter unbroken
+deteriorating streak running from 2025Q2 through 2026Q2, the longest such run
+in the dataset.
+
+**Important tension, not glossed over:** guidance-credibility trajectory and
+actual stock performance have clearly NOT moved together for Tesla -- the
+stock delivered enormous returns over a decade where "deteriorating"
+outnumbered "improving" more than 11-to-1. Consistent with the correlation
+finding above (guidance credibility didn't survive as a general predictor):
+this tool measures something real and coherent (is management's forecasting
+discipline getting more or less honest over time), but that is demonstrably
+not the same thing as "is this a good stock to own." Use it for what it
+actually measures, not as a disguised price signal.
+
+**Stance/price-target tool** (`src/agents/earnings_stance.py`): reads a
+synthesis report plus the actual stock price at the time of the call, and
+outputs bullish/neutral/bearish plus bull/base/bear 12-month % move scenarios
+grounded in specific claims from the synthesis (not valuation multiples --
+deliberately simple to avoid fabricating numbers the model has no basis for).
+Includes an explicit instruction not to use hindsight knowledge of what
+actually happened to the company, since a stance/price-target is much more
+directly "the answer" a backtest would check than an abstract credibility
+score was.
+
+**Single spot-check outcome, illustrative not statistical:** on the same Oct
+2019 Tesla call, the tool produced a well-reasoned NEUTRAL stance with a bull
+case of +55% over 12 months. The stock's actual return was +736% -- more than
+13x past even the most bullish scenario generated. Not a reasoning failure
+(the read of the call itself was sound and appropriately hedged given what
+was actually said) -- Tesla's 2020 move was driven by COVID-era retail mania,
+S&P 500 inclusion speculation, and a broad growth-stock re-rating, none of
+which any single earnings call could contain. This is a hard ceiling on what
+a transcript-only tool can ever forecast, independent of how good the
+reasoning is: treat price-target output as "a reasoned scenario spread given
+only this document," never as a real forecast with statistical coverage.
+
+**Status:** both tools work as designed and are useful analyst aids for
+manual speculation. Not deployed as automated signals -- that's the whole
+point of this reframing. If revisited: run the trajectory tool on HYLN (or
+any other ticker) for a second data point on whether the "credibility and
+price diverge" pattern is Tesla-specific or general; the stance tool's
+single-call-hindsight-blindness caveat matters more for a backtest sample
+than for genuine live/prospective use, where no hindsight problem exists at
+all.
+
+---
+
+## 2026-09-18 — Multi-agent earnings-call analysis as a return predictor
+
+**Idea:** analyze earnings-call transcripts through several independent
+specialist lenses (tone/sentiment, guidance credibility, competitive
+positioning, financial health), synthesize the four reads explicitly
+surfacing agreement/conflict rather than averaging them, then test whether
+any of it predicts forward returns.
+
+**Pipeline built** (`src/agents/earnings_call_analyst.py`,
+`src/research/{score_earnings_synthesis,build_earnings_call_returns,
+correlate_earnings_scores}.py`): four `claude -p` specialist calls run in
+parallel per transcript, a fifth call synthesizes them, a Haiku call extracts
+5 structured 0-100 scores from the synthesis (tone_confidence,
+guidance_credibility, competitive_strength, financial_health, conflict_level)
+so results become correlatable rather than only qualitative. Transcripts
+sourced by scraping stockanalysis.com's per-company transcript index (no
+bulk transcript API exists) -- see "known gaps" below for what that implies
+about scaling this beyond a couple of tickers.
+
+**Qualitative pipeline output is genuinely strong.** Spot-checked against the
+real Oct 2019 Tesla call: every claim in every report was grounded in an
+actual, verifiable quote (not hallucinated), the guidance-credibility agent
+correctly flagged Musk's live on-call redefinition of "feature-complete" as a
+quiet walk-back and caught that a "Cybertruck production constrained this
+quarter" remark was chronologically impossible (truck wasn't unveiled yet),
+and the synthesis surfaced four genuine, unresolved tensions (e.g. confident
+tone vs. weak evidentiary support on the same superlative claims) instead of
+averaging them into a single score. This part of the idea works as designed.
+
+**Quantitative test: built full historical panels for two tickers and
+correlated the 5 scores against 6 forward-return horizons plus EPS surprise.**
+- **TSLA (n=40 quarters, 2016-2026):** `guidance_credibility` correlated with
+  the 1-year forward return at r=+0.39 (Pearson, p<0.05) and r=+0.41
+  (Spearman, p<0.05) -- consistent across both measures, and it beat
+  EPS-surprise-alone at the same horizon (r=-0.02). Builds from ~0 at short
+  horizons to its peak at 252d, which is qualitatively sensible (evidence-backed
+  vs. aspirational guidance shows up over a year, not next-day).
+- **HYLN (n=23 quarters, 2020-2026), run specifically to test whether the TSLA
+  result generalizes:** the same relationship appeared to replicate at first
+  glance (r=+0.35) but Pearson/Spearman diverged sharply (+0.35 vs +0.15) --
+  the classic signature of an outlier-driven correlation, not a real one.
+  Confirmed directly: removing just 2 of 20 quarters (two extreme return
+  outliers, +378% and +143% in one year -- HYLN's stock is meme-stock-volatile)
+  flips the sign entirely, r=+0.35 -> r=-0.15. **The TSLA finding does not
+  survive a second ticker.**
+
+**What the two-ticker test DID establish, consistently:** raw EPS surprise
+alone carries ~zero 1-year predictive signal in both names (r=-0.02 TSLA,
+r=-0.09 HYLN) -- this part replicated cleanly, it's just that the proposed
+fix (qualitative guidance-credibility score) turned out to be a Tesla-specific
+artifact rather than a general one. Plausible reason: Tesla's guidance has a
+uniquely legible "aspirational vs. evidence-backed" split under one specific,
+highly-quotable CEO; most companies' guidance language may not carry the same
+signal at all.
+
+**Conclusion: not a usable signal, but a well-executed negative result** --
+same shape as the sentiment and insider-trading findings above: plausible
+hypothesis, working pipeline, doesn't survive rigorous testing. Filed rather
+than pursued further. Not deployed.
+
+**Known gaps / scaling reality if revisited:**
+- No bulk transcript API exists; every ticker requires manually locating and
+  scraping a transcript-index page (stockanalysis.com worked well for both
+  TSLA and HYLN) then per-quarter scraping with pagination-safe extraction.
+  This is a real one-time backfill cost per ticker (~5-10 min engineering +
+  scraping time), not something that scales to hundreds of tickers casually.
+- The melt-up screener's universe (overwhelmingly microcaps) mismatches this
+  tool's natural fit -- most microcaps don't host formal analyst earnings
+  calls with transcripts at all. This tool fits the PEAD-style large-cap
+  universe (`fetch_earnings_calendar.py`'s tickers), not the melt-up universe
+  (see the melt-up screener entry below for that universe's characteristics).
+- The guidance-credibility score partly draws on the underlying model's
+  general/training-data knowledge of a company's known track record (by
+  design, for judging plausibility against past promises) -- appropriate for
+  backtesting already-known history, but means this specific mechanism won't
+  carry the same advantage when analyzing a brand-new call after the model's
+  training cutoff.
+- If revisited, a third ticker with a genuinely different guidance style
+  (neither Musk-style grandiose promises nor HYLN's SPAC-hype volatility)
+  would be needed before concluding anything either way -- two tickers proved
+  enough to falsify the hypothesis but were not intended as, and are not, a
+  general-purpose validation.
+
+---
+
 ## 2026-09-17 — News/sentiment as a melt-up-screener distress filter
 
 **Idea (user hypothesis):** stocks that melt up and stocks that go under should
