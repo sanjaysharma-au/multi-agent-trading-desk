@@ -1,16 +1,36 @@
 import argparse
+import json
+import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
 OUTPUT_DIR = Path("earnings_call_analysis")
-DEFAULT_MODEL = "nemotron-3-ultra"
+DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 DEFAULT_BACKEND = "nemotron"  # "nemotron" or "claude"
 CLAUDE_TIMEOUT_SECONDS = 600
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 10
+
+NIM_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NIM_TIMEOUT_SECONDS = 600
+NIM_MAX_TOKENS = 8192
+NIM_TEMPERATURE = 0.2
+NIM_RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504}
+# integrate.api.nvidia.com throttles this account under concurrent load (observed:
+# 5 simultaneous requests -> 503 "Service temporarily overloaded"), so nemotron
+# calls get their own lower concurrency cap and more retry headroom than claude.
+NIM_MAX_CONCURRENCY = 2
+NIM_MAX_ATTEMPTS = 5
+NIM_RETRY_BACKOFF_SECONDS = 15
 
 SENTIMENT_SYSTEM_PROMPT = """You are a sentiment and tone analyst reviewing an earnings call transcript. You do not have access to the stock price, analyst ratings, or any information beyond the transcript text itself. Do not use any knowledge of this stock's price before or after this call, even if you recall it from training data -- deliberately set that aside. Reason only from what's said on the call.
 
@@ -137,35 +157,75 @@ def _call_claude(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL
     raise last_error
 
 
+def _nim_base_url() -> str:
+    return os.environ.get("NVIDIA_BASE_URL", NIM_DEFAULT_BASE_URL).rstrip("/")
+
+
+def _nim_headers() -> dict[str, str]:
+    try:
+        api_key = os.environ["NVIDIA_API_KEY"]
+    except KeyError:
+        raise RuntimeError(
+            "NVIDIA_API_KEY is not set. Add it to .env (see .env.example), or pass "
+            "--backend claude to use the Claude CLI instead."
+        ) from None
+    return {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+
+
+def list_nim_models() -> list[str]:
+    response = requests.get(
+        f"{_nim_base_url()}/models", headers=_nim_headers(), timeout=60
+    )
+    response.raise_for_status()
+    return sorted(m["id"] for m in response.json().get("data", []))
+
+
+def _strip_reasoning(text: str) -> str:
+    # Nemotron reasoning variants emit their scratchpad inline; it would otherwise
+    # be written verbatim into the specialist .md reports.
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def _call_nemotron(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL) -> str:
-    """
-    This function is a placeholder for calling Nemotron 3 Ultra.
-    In practice, the prompts are written to a file for the AI assistant to process,
-    and responses are read back from a response file.
-    """
-    # Write prompt to file for AI assistant to process
-    prompt_file = Path("prompts") / f"prompt_{int(time.time() * 1000)}.txt"
-    prompt_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    prompt_content = f"SYSTEM PROMPT:\n{system_prompt}\n\nUSER INPUT:\n{user_input}\n\n---\nMODEL: {model}\n"
-    prompt_file.write_text(prompt_content)
-    
-    # Wait for response file
-    response_file = prompt_file.with_suffix(".response.txt")
-    print(f"Waiting for response in {response_file}...")
-    
-    max_wait = 300  # 5 minutes
-    waited = 0
-    while not response_file.exists() and waited < max_wait:
-        time.sleep(2)
-        waited += 2
-    
-    if response_file.exists():
-        response = response_file.read_text().strip()
-        response_file.unlink()  # Clean up
-        return response
-    
-    raise TimeoutError(f"No response received within {max_wait} seconds")
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ],
+        "temperature": NIM_TEMPERATURE,
+        "max_tokens": NIM_MAX_TOKENS,
+        "stream": False,
+    }
+
+    last_error = None
+    for attempt in range(NIM_MAX_ATTEMPTS):
+        try:
+            response = requests.post(
+                f"{_nim_base_url()}/chat/completions",
+                headers={**_nim_headers(), "Content-Type": "application/json"},
+                json=payload,
+                timeout=NIM_TIMEOUT_SECONDS,
+            )
+            if response.status_code == 200:
+                choice = response.json()["choices"][0]
+                text = _strip_reasoning(choice["message"].get("content") or "")
+                if not text:
+                    raise RuntimeError(
+                        f"NIM returned an empty completion "
+                        f"(finish_reason={choice.get('finish_reason')})"
+                    )
+                return text
+            last_error = RuntimeError(
+                f"NIM request failed (HTTP {response.status_code}): {response.text.strip()[:500]}"
+            )
+            if response.status_code not in NIM_RETRY_STATUS:
+                raise last_error
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_error = e
+        if attempt < NIM_MAX_ATTEMPTS - 1:
+            time.sleep(NIM_RETRY_BACKOFF_SECONDS * (2 ** attempt))
+    raise last_error
 
 
 def _call_llm(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL, backend: str = DEFAULT_BACKEND) -> str:
@@ -203,7 +263,8 @@ def run_all_specialists(
     prior_guidance_text: str | None = None,
     backend: str = DEFAULT_BACKEND,
 ) -> dict[str, str]:
-    with ThreadPoolExecutor(max_workers=len(SPECIALISTS)) as executor:
+    max_workers = NIM_MAX_CONCURRENCY if backend == "nemotron" else len(SPECIALISTS)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             name: executor.submit(run_specialist, name, transcript_text, model, prior_guidance_text, backend)
             for name in SPECIALISTS
@@ -240,17 +301,39 @@ def analyze_transcript(
     for name, text in specialist_outputs.items():
         (out_dir / f"{name}.md").write_text(text)
     (out_dir / "synthesis.md").write_text(synthesis)
+    (out_dir / "provenance.json").write_text(
+        json.dumps(
+            {
+                "backend": backend,
+                "model": model,
+                "endpoint": _nim_base_url() if backend == "nemotron" else None,
+                "transcript": str(transcript_path),
+                "prior_guidance": str(prior_guidance_path) if prior_guidance_path else None,
+                "generated_at": datetime.now().isoformat(timespec="seconds"),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return out_dir
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("transcript", type=Path)
-    parser.add_argument("--ticker", required=True)
+    parser.add_argument("transcript", type=Path, nargs="?")
+    parser.add_argument("--ticker")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--backend", choices=["nemotron", "claude"], default=DEFAULT_BACKEND)
     parser.add_argument("--prior-guidance", type=Path, default=None)
+    parser.add_argument("--list-models", action="store_true")
     args = parser.parse_args()
+
+    if args.list_models:
+        for model_id in list_nim_models():
+            print(model_id)
+        return
+    if not args.transcript or not args.ticker:
+        parser.error("transcript and --ticker are required unless --list-models is given")
 
     out_dir = analyze_transcript(
         args.transcript, args.ticker, model=args.model, prior_guidance_path=args.prior_guidance, backend=args.backend

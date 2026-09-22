@@ -1,5 +1,6 @@
 massive
 python-dotenv
+requests
 pandas
 scikit-learn
 yfinance

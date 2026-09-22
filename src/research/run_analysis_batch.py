@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agents.earnings_call_analyst import analyze_transcript, DEFAULT_BACKEND
+from agents.earnings_call_analyst import analyze_transcript, DEFAULT_BACKEND, DEFAULT_MODEL
 
 TRANSCRIPT_DIR = Path("data/earnings_calls")
 DEFAULT_OUTPUT_DIR = Path("earnings_call_analysis_v2")
@@ -25,7 +25,7 @@ def quarter_sort_key(label: str) -> tuple[int, int]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("ticker")
-    parser.add_argument("--model", default="nemotron-3-ultra")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--backend", choices=["nemotron", "claude"], default=DEFAULT_BACKEND)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--only-quarter", default=None)
