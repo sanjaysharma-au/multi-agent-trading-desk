@@ -1,7 +1,6 @@
 import argparse
 import re
 import subprocess
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -11,11 +10,8 @@ REFERENCE_SWING_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "exam
 REFERENCE_DAYTRADE_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_daytrade_model.py"
 REFERENCE_OVERNIGHT_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_overnight_model.py"
 REFERENCE_EARNINGS_MODEL_PATH = Path(__file__).resolve().parents[1] / "wfo" / "example_earnings_model.py"
-DEFAULT_MODEL = "nemotron-3-ultra"
-DEFAULT_BACKEND = "nemotron"  # "nemotron" or "claude"
+DEFAULT_MODEL = "sonnet"
 CLAUDE_TIMEOUT_SECONDS = 600
-MAX_ATTEMPTS = 3
-RETRY_BACKOFF_SECONDS = 10
 
 # Bump this whenever a CONTRACT_TEMPLATE changes in a way that materially
 # affects generated scripts (new required field, new correctness rule, etc.),
@@ -261,118 +257,42 @@ def _extract_code(text: str) -> str:
 def _call_claude(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL) -> str:
     last_error = None
     for attempt in range(MAX_ATTEMPTS):
-        try:
-            result = subprocess.run(
-                [
-                    "claude",
-                    "-p",
-                    user_input,
-                    "--system-prompt", system_prompt,
-                    "--model", model,
-                    "--output-format", "text",
-                    "--restricted",
-                    "--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit",
-                    "--permission-prompts", "none",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=CLAUDE_TIMEOUT_SECONDS,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-            last_error = RuntimeError(
-                f"claude CLI failed (exit {result.returncode}): {result.stderr.strip()}"
-            )
-        except subprocess.TimeoutExpired as e:
-            last_error = e
-        if attempt < MAX_ATTEMPTS - 1:
-            time.sleep(RETRY_BACKOFF_SECONDS * (2 ** attempt))
-    raise last_error
-
-
-def _call_nemotron(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL) -> str:
-    """
-    This function is a placeholder for calling Nemotron 3 Ultra.
-    In practice, the prompts are written to a file for the AI assistant to process,
-    and responses are read back from a response file.
-    """
-    # Write prompt to file for AI assistant to process
-    prompt_file = Path("prompts") / f"prompt_{int(time.time() * 1000)}.txt"
-    prompt_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    prompt_content = f"SYSTEM PROMPT:\n{system_prompt}\n\nUSER INPUT:\n{user_input}\n\n---\nMODEL: {model}\n"
-    prompt_file.write_text(prompt_content)
-    
-    # Wait for response file
-    response_file = prompt_file.with_suffix(".response.txt")
-    print(f"Waiting for response in {response_file}...")
-    
-    max_wait = 300  # 5 minutes
-    waited = 0
-    while not response_file.exists() and waited < max_wait:
-        time.sleep(2)
-        waited += 2
-    
-    if response_file.exists():
-        response = response_file.read_text().strip()
-        response_file.unlink()  # Clean up
-        return response
-    
-    raise TimeoutError(f"No response received within {max_wait} seconds")
-
-
-def _call_llm(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL, backend: str = DEFAULT_BACKEND) -> str:
-    """Call the configured LLM backend."""
-    if backend == "claude":
-        return _call_claude(system_prompt, user_input, model)
-    elif backend == "nemotron":
-        return _call_nemotron(system_prompt, user_input, model)
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
-
-
-def generate_model_script(
+        def generate_model_script(
     instructions: str,
     iteration_tag: str | None = None,
     model: str = DEFAULT_MODEL,
     style: str = "intraday",
-    backend: str = DEFAULT_BACKEND,
 ) -> Path:
     tag = iteration_tag or datetime.now().strftime("%Y%m%dT%H%M%S")
 
-    if backend == "claude":
-        result = subprocess.run(
-            [
-                "claude",
-                "-p",
-                instructions,
-                "--system-prompt",
-                _build_system_prompt(style),
-                "--model",
-                model,
-                "--output-format",
-                "text",
-                "--restricted",
-                "--disallowedTools",
-                "Bash",
-                "Edit",
-                "Write",
-                "NotebookEdit",
-                "--permission-prompts",
-                "none",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=CLAUDE_TIMEOUT_SECONDS,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"claude CLI failed (exit {result.returncode}): {result.stderr}")
-        code = _extract_code(result.stdout)
-    elif backend == "nemotron":
-        response = _call_nemotron(_build_system_prompt(style), instructions, model=model)
-        code = _extract_code(response)
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+    result = subprocess.run(
+        [
+            "claude",
+            "-p",
+            instructions,
+            "--system-prompt",
+            _build_system_prompt(style),
+            "--model",
+            model,
+            "--output-format",
+            "text",
+            "--restricted",
+            "--disallowedTools",
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "--permission-prompts",
+            "none",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=CLAUDE_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"claude CLI failed (exit {result.returncode}): {result.stderr}")
+
+    code = _extract_code(result.stdout)
 
     GENERATED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     path = GENERATED_MODELS_DIR / f"{tag}_model.py"

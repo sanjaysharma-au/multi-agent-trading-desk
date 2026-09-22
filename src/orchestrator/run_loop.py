@@ -11,7 +11,6 @@ from agents.model_designer import (
     CONTRACT_VERSION_OVERNIGHT,
     CONTRACT_VERSION_SWING,
     generate_model_script,
-    DEFAULT_BACKEND,
 )
 from wfo.run_iteration import DAILY_DATA_DIR, DATA_DIR, EARNINGS_DIR, ITERATIONS_DIR, NEWS_DIR, run_iteration
 from wfo.schema import IterationResults, load_results
@@ -251,7 +250,6 @@ def run_loop(
     independent: bool = False,
     accept_threshold: float = CUMULATIVE_ROI_ACCEPT_THRESHOLD,
     max_iterations: int = MAX_ITERATIONS,
-    backend: str = DEFAULT_BACKEND,
 ) -> None:
     sys.stdout.reconfigure(line_buffering=True)
     run_id = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -308,7 +306,7 @@ def run_loop(
         tag = f"{run_id}_{tag_label}_iter{i}"
 
         try:
-            script_path = generate_model_script(instructions, iteration_tag=tag, style=style, backend=backend)
+            script_path = generate_model_script(instructions, iteration_tag=tag, style=style)
         except Exception as e:
             last_failure = f"generation error: {e}"
             print(f"\n[iteration {i}/{max_iterations}] ticker: {ticker}  FAILED: {last_failure}")
@@ -410,10 +408,6 @@ def main():
         "--max-iterations", type=int, default=MAX_ITERATIONS,
         help=f"Number of iterations to run (default {MAX_ITERATIONS}).",
     )
-    parser.add_argument(
-        "--backend", choices=["nemotron", "claude"], default=DEFAULT_BACKEND,
-        help=f"LLM backend to use (default {DEFAULT_BACKEND}).",
-    )
     args = parser.parse_args()
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()]
@@ -436,7 +430,7 @@ def main():
         tickers, train_months, predict_months, gap_days,
         args.holdout_months, holdout_tickers, style=args.style,
         independent=args.independent, accept_threshold=args.accept_threshold,
-        max_iterations=args.max_iterations, backend=args.backend,
+        max_iterations=args.max_iterations,
     )
 
 
