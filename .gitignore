@@ -12,6 +12,7 @@ iterations/
 generated_models/
 reports/
 earnings_call_analysis/
+earnings_call_analysis_v2/
 earnings_call_trajectory/
 *_backup/
 *.log

@@ -6,6 +6,110 @@ re-spend time re-discovering the same dead end.
 
 ---
 
+## 2026-09-21 — Why the earnings agents never flagged TSLA: eight mechanical causes
+
+**Prompted by** asking the obvious question of the two entries below: TSLA was a
+genuine multi-bagger, so where exactly did this pipeline misread it? The answer
+is not "the LLM was wrong about Tesla." The agents read the calls accurately and
+scored the wrong variable, the pipeline then discarded the outputs that could
+have expressed a boom, and the write-up drew its conclusion from a file that had
+since been overwritten.
+
+**Correction to the entry below first.** That entry reports a TSLA trajectory
+tally of *23 deteriorating / 14 stable / 2 improving*. The live
+`earnings_call_trajectory/TSLA/_verdicts.jsonl` tallies **24 / 12 / 3**. The
+published figure describes `earnings_call_trajectory_v1_backup/`, not the
+current run. v2 flipped 10 of 39 pairs, mostly toward more bearish. So "bearish
+on Tesla more than 11-to-1" is partly an artifact of a prompt revision, and any
+future claim about verdict tallies should name which run it came from.
+
+**The evidence.** Ranking TSLA's 40 quarters by realised 252d forward return
+against what the agents said at the time:
+
+| quarter | 252d ret | guid_cred | fin_health | traj | verdict |
+|---|---|---|---|---|---|
+| 2019Q3 | +736% | 47 | 67 | +45 | improving |
+| 2019Q4 | +619% | 45 | 60 | -22 | stable |
+| 2019Q2 | +471% | 55 | 60 | -38 | deteriorating |
+| 2020Q1 | +323% | 40 | 62 | -20 | stable |
+| 2021Q3 | -28% | 42 | **82** | -65 | deteriorating |
+| 2021Q4 | -43% | 40 | **80** | -22 | stable |
+| 2022Q1 | -49% | 42 | **72** | -68 | deteriorating |
+
+Eight causes, in rough order of how much they matter:
+
+1. **No dynamic range.** `guidance_credibility` spans 28-55 across ten years and
+   never once exceeds 55. Two instructions compounded: the synthesis prompt
+   forbade "a confident single-number verdict" and the scorer pushed any mixed
+   read to mid-range. A 10-bagger call and a dud landed 8 points apart.
+2. **Silence on a moonshot was booked as a liability.** The trajectory agent on
+   2019Q3->Q4 wrote "record deliveries, positive GAAP net income two quarters
+   running -- that's upside, not just delivery" and then netted to STABLE (-22)
+   because FSD went quiet. Unproven-program optionality is what re-rated the
+   stock; the system scored it as dishonesty.
+3. **Correlated lenses double-counted.** The 2019Q3 synthesis claims "three
+   independent methodologies converge" on FSD -- but sentiment, guidance and
+   financial were all reading the same passages. The prompt rewarded convergence,
+   so the most bearish item in every call got triple weight.
+4. **`financial_health` is a top-ticker, not a predictor.** Its four highest
+   readings ever (82/80/77/72) landed on quarters returning -28%, -43%, -5% and
+   -49%. The +736% quarter got 67. Balance-sheet quality peaks at max euphoria.
+5. **Two signals were produced and never connected.** `_verdicts.jsonl` had
+   exactly one reference in the repo -- the line that writes it. `assess_stance`,
+   the only place a BULLISH call or a 12-month bull case existed, had no caller
+   outside its own CLI. `SCORE_COLS` was synthesis-only.
+6. **And the orphaned signal was hollow anyway.** Joined manually, `traj_score`
+   gives Pearson +0.39 at 252d and +0.36 at 63d -- beating the published score at
+   short horizons. But Spearman is +0.21 (p=0.22) and dropping the top 4 quarters
+   takes it to -0.05. Outlier-driven: the same signature already diagnosed by
+   hand for HYLN. This is now caught automatically (see below).
+7. **The one score that worked is the only one that was allowed to cheat.**
+   `guidance_credibility` carried the sole training-data carve-out ("you may draw
+   on your general knowledge of this company's OPERATIONAL track record"). It is
+   also the only robust result in the entire panel. Leakage is a live alternative
+   explanation to skill, and until tested the +0.41 Spearman should not be relied
+   on.
+8. **The synthesis is a lossy bottleneck** (found while fixing the above). The
+   scorer read only `synthesis.md`. On the re-run of 2019Q3, evidence of
+   accelerating orders appears 8 times in `optionality.md` and **zero** times in
+   `synthesis.md` -- so the scorer returned a mid-range "no basis to judge" for
+   growth acceleration while the evidence sat one file away. Scoring a
+   specialist-owned dimension from the synthesis systematically compresses it.
+
+**A robustness gate now runs as standard** (`robustness_report` in
+`correlate_earnings_scores.py`): every score/horizon pair reports Pearson,
+Spearman and drop-top-2/4 sensitivity, and is flagged `OUTLIER-DRIVEN` when a
+significant Pearson has a non-significant Spearman, or when dropping the top 4
+outcomes flips the sign or halves the magnitude. Near-zero correlations are
+labelled `no signal` rather than flagged, so the flag keeps its meaning. Run
+against the v1 TSLA panel, **exactly one cell in the whole table survives**:
+`guidance_credibility` at 252d. Everything else is noise or outlier-driven. No
+result from this pipeline should be written up again without this gate.
+
+**Changes made in response** (all four lenses keep their anti-hindsight
+blinders): a fifth `optionality` specialist scoring TAM, growth's second
+derivative, offensive-vs-defensive capex and demand-vs-supply constraint, with
+an explicit LATE-BUT-ADVANCING / STALLED / DEAD trichotomy so a slipping
+moonshot is no longer scored identically to an abandoned one; the guidance
+carve-out removed and replaced with the prior quarter's `guidance.md` passed in
+context, which forces the batch to run in quarter order; the synthesis prompt
+now has to state whether agreement is independent corroboration or one passage
+read five ways, and is told to avoid false precision rather than to avoid
+conviction; anchored 20/50/80/95 rubrics on every score; and the scorer now
+reads each specialist report directly, scoring each dimension from the report
+that owns it.
+
+**Status: re-run in flight, conclusions NOT yet drawn.** v2 writes to
+`earnings_call_analysis_v2/` and `TSLA_scores_v2.jsonl` so v1 stays intact for
+comparison. The decisive test is cause 7: if `guidance_credibility`'s +0.41
+Spearman survives removal of the training-data carve-out it was skill; if it
+collapses, it was hindsight and the positive result in the entry below should be
+retracted. One structural limit survives all of this regardless -- `HORIZONS`
+stops at 252 trading days, so a multi-bagger thesis is unmeasurable in this panel
+by construction, and `fwd_ret_252d` is already NaN for the last four quarters.
+
+---
+
 ## 2026-09-18 — Earnings-call trajectory tracking + stance/price-target tools
 
 **Reframing, after the ML-predictor idea above was falsified:** stop trying
