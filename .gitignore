@@ -14,6 +14,7 @@ reports/
 earnings_call_analysis/
 earnings_call_analysis_v2/
 earnings_call_trajectory/
+earnings_call_trajectory_v2/
 *_backup/
 *.log
 

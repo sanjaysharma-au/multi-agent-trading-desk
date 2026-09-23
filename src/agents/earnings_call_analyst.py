@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -22,7 +23,23 @@ RETRY_BACKOFF_SECONDS = 10
 
 NIM_DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NIM_TIMEOUT_SECONDS = 600
+# With stream:False, requests' timeout only fires on total silence from the start
+# of the request -- a connection that receives some bytes (e.g. headers) and then
+# stalls never trips it (observed: a connection sat ESTABLISHED for 20+ minutes
+# after receiving a partial response). Streaming sidesteps this: each SSE chunk is
+# its own low-level read, so a plain per-read timeout correctly bounds the GAP
+# between chunks instead of the whole response.
+NIM_STREAM_STALL_SECONDS = 90
 NIM_MAX_TOKENS = 8192
+# Reasoning tokens count against the same max_tokens budget as the visible
+# content. A prompt that needs a lot of reasoning (many claims to check, say)
+# can exhaust the budget before the model ever reaches its answer, leaving a
+# non-empty but truncated completion (finish_reason "length") that the old
+# empty-completion check didn't catch -- observed: ~37% of trajectory-tool
+# calls silently truncated mid-analysis, no verdict, marked as succeeded.
+# On a length truncation we retry with a larger budget rather than the same
+# one that already proved insufficient for this specific prompt.
+NIM_MAX_TOKENS_CEILING = 32768
 NIM_TEMPERATURE = 0.2
 NIM_RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504}
 # integrate.api.nvidia.com throttles this account under concurrent load (observed:
@@ -186,54 +203,144 @@ def _strip_reasoning(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
-def _call_nemotron(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL) -> str:
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input},
-        ],
-        "temperature": NIM_TEMPERATURE,
-        "max_tokens": NIM_MAX_TOKENS,
-        "stream": False,
-    }
+class NimHTTPError(RuntimeError):
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        super().__init__(f"NIM request failed (HTTP {status_code}): {body.strip()[:500]}")
+
+
+# run_all_specialists streams several of these concurrently (NIM_MAX_CONCURRENCY
+# workers); each print below is one atomic call, but with no lock two threads'
+# calls still land in whatever order the OS schedules them, splicing partial
+# words from different specialists together on screen. The lock plus a
+# label+tag prefix on every print instead makes each line attributable and
+# whole, at the cost of the smooth inline word-by-word feel a single stream has.
+_print_lock = threading.Lock()
+
+
+def _print_stream_piece(label: str | None, tag: str, text: str) -> None:
+    # A piece can itself contain embedded newlines (a paragraph break in the
+    # model's reasoning, say); prefixing only the start of the whole string
+    # would leave those later physical lines unlabeled and indistinguishable
+    # from another thread's output, so every line gets its own prefix, printed
+    # under one lock acquisition so the piece still lands as one atomic block.
+    prefix = f"[{label}:{tag}] " if label else f"[{tag}] "
+    with _print_lock:
+        for line in text.split("\n"):
+            print(prefix + line)
+
+
+def _stream_completion(
+    url: str, headers: dict, payload: dict, label: str | None = None
+) -> tuple[str, str | None]:
+    # stream:True so each SSE chunk is its own low-level socket read -- the
+    # per-read NIM_STREAM_STALL_SECONDS timeout below then correctly bounds the
+    # GAP between chunks, not the whole response (see NIM_STREAM_STALL_SECONDS).
+    # Streaming is for progress visibility only: the pieces are reassembled and
+    # the caller gets back one complete string, exactly as a non-streaming call
+    # would have returned -- nothing partial is ever saved to disk.
+    with requests.post(
+        url, headers=headers, json=payload, stream=True, timeout=NIM_STREAM_STALL_SECONDS
+    ) as response:
+        if response.status_code != 200:
+            raise NimHTTPError(response.status_code, response.text)
+        content_parts = []
+        finish_reason = None
+        for raw_line in response.iter_lines(decode_unicode=True):
+            if not raw_line or not raw_line.startswith("data: "):
+                continue
+            data = raw_line[len("data: "):]
+            if data.strip() == "[DONE]":
+                break
+            chunk = json.loads(data)
+            # The server can't send an HTTP error status once streaming headers
+            # are already flushed, so an overload/error mid-response arrives as
+            # an in-band frame instead (observed under concurrent load: a chunk
+            # with no "choices" key at all). Route it through NimHTTPError so it
+            # gets the same retry treatment as a top-level HTTP failure, rather
+            # than crashing the whole call on a bare KeyError.
+            if "error" in chunk:
+                raise NimHTTPError(503, str(chunk["error"]))
+            choices = chunk.get("choices")
+            if not choices:
+                continue
+            choice = choices[0]
+            delta = choice.get("delta", {})
+            # reasoning_content deltas arrive first and can run for a while before
+            # any content delta shows up -- print them too (not saved) so a live
+            # run shows real activity instead of looking stalled during that phase.
+            reasoning_piece = delta.get("reasoning_content") or ""
+            if reasoning_piece:
+                _print_stream_piece(label, "reasoning", reasoning_piece)
+            piece = delta.get("content") or ""
+            if piece:
+                content_parts.append(piece)
+                _print_stream_piece(label, "writing", piece)
+            if choice.get("finish_reason"):
+                finish_reason = choice["finish_reason"]
+        return "".join(content_parts), finish_reason
+
+
+def _call_nemotron(
+    system_prompt: str,
+    user_input: str,
+    model: str = DEFAULT_MODEL,
+    label: str | None = None,
+    max_tokens: int = NIM_MAX_TOKENS,
+) -> str:
+    url = f"{_nim_base_url()}/chat/completions"
+    headers = {**_nim_headers(), "Content-Type": "application/json"}
 
     last_error = None
     for attempt in range(NIM_MAX_ATTEMPTS):
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            "temperature": NIM_TEMPERATURE,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
         try:
-            response = requests.post(
-                f"{_nim_base_url()}/chat/completions",
-                headers={**_nim_headers(), "Content-Type": "application/json"},
-                json=payload,
-                timeout=NIM_TIMEOUT_SECONDS,
-            )
-            if response.status_code == 200:
-                choice = response.json()["choices"][0]
-                text = _strip_reasoning(choice["message"].get("content") or "")
-                if not text:
+            raw_text, finish_reason = _stream_completion(url, headers, payload, label=label)
+            text = _strip_reasoning(raw_text)
+            if not text:
+                raise RuntimeError(f"NIM returned an empty completion (finish_reason={finish_reason})")
+            if finish_reason == "length":
+                if max_tokens >= NIM_MAX_TOKENS_CEILING:
                     raise RuntimeError(
-                        f"NIM returned an empty completion "
-                        f"(finish_reason={choice.get('finish_reason')})"
+                        f"NIM truncated the completion (finish_reason=length) even at the "
+                        f"{NIM_MAX_TOKENS_CEILING}-token ceiling"
                     )
-                return text
-            last_error = RuntimeError(
-                f"NIM request failed (HTTP {response.status_code}): {response.text.strip()[:500]}"
-            )
-            if response.status_code not in NIM_RETRY_STATUS:
-                raise last_error
-        except (requests.Timeout, requests.ConnectionError) as e:
+                max_tokens = min(max_tokens * 2, NIM_MAX_TOKENS_CEILING)
+                raise RuntimeError(f"NIM truncated the completion (finish_reason=length), retrying with max_tokens={max_tokens}")
+            return text
+        except (requests.Timeout, requests.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
             last_error = e
+        except (NimHTTPError, RuntimeError) as e:
+            last_error = e
+            if isinstance(e, NimHTTPError) and e.status_code not in NIM_RETRY_STATUS:
+                raise
         if attempt < NIM_MAX_ATTEMPTS - 1:
+            print(f"  [retrying, attempt {attempt + 2}/{NIM_MAX_ATTEMPTS}: {last_error}]")
             time.sleep(NIM_RETRY_BACKOFF_SECONDS * (2 ** attempt))
     raise last_error
 
 
-def _call_llm(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL, backend: str = DEFAULT_BACKEND) -> str:
+def _call_llm(
+    system_prompt: str,
+    user_input: str,
+    model: str = DEFAULT_MODEL,
+    backend: str = DEFAULT_BACKEND,
+    label: str | None = None,
+) -> str:
     """Call the configured LLM backend."""
     if backend == "claude":
         return _call_claude(system_prompt, user_input, model)
     elif backend == "nemotron":
-        return _call_nemotron(system_prompt, user_input, model)
+        return _call_nemotron(system_prompt, user_input, model, label=label)
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
@@ -254,7 +361,7 @@ def run_specialist(
         )
     else:
         instructions = f"Here is the earnings call transcript to analyze:\n\n{transcript_text}"
-    return _call_llm(system_prompt, instructions, model=model, backend=backend)
+    return _call_llm(system_prompt, instructions, model=model, backend=backend, label=name)
 
 
 def run_all_specialists(
@@ -277,7 +384,7 @@ def synthesize(specialist_outputs: dict[str, str], model: str = DEFAULT_MODEL, b
         f"=== {name.upper()} ANALYST ===\n{text}" for name, text in specialist_outputs.items()
     )
     instructions = f"Here are the {len(specialist_outputs)} independent specialist reports:\n\n{sections}"
-    return _call_llm(SYNTHESIS_SYSTEM_PROMPT, instructions, model=model, backend=backend)
+    return _call_llm(SYNTHESIS_SYSTEM_PROMPT, instructions, model=model, backend=backend, label="synthesis")
 
 
 def analyze_transcript(

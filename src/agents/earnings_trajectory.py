@@ -1,9 +1,15 @@
 import argparse
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from earnings_call_analyst import _call_nemotron
+from earnings_call_analyst import DEFAULT_MODEL as NEMOTRON_DEFAULT_MODEL
 
 CLAUDE_TIMEOUT_SECONDS = 600
 DEFAULT_MODEL = "sonnet"
+DEFAULT_BACKEND = "claude"  # "claude" or "nemotron"
 
 TRAJECTORY_SYSTEM_PROMPT = """You are a quarter-over-quarter execution tracker. You are given (1) the specific forward-looking guidance and promises extracted from a company's PREVIOUS earnings call, and (2) the full transcript of the CURRENT, more recent earnings call.
 
@@ -40,12 +46,25 @@ def _call_claude(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL
     return result.stdout.strip()
 
 
-def assess_trajectory(prior_guidance_text: str, current_transcript_text: str, model: str = DEFAULT_MODEL) -> str:
+def assess_trajectory(
+    prior_guidance_text: str,
+    current_transcript_text: str,
+    model: str | None = None,
+    backend: str = DEFAULT_BACKEND,
+    label: str = "trajectory",
+) -> str:
     instructions = (
         f"PREVIOUS QUARTER'S GUIDANCE ANALYSIS:\n\n{prior_guidance_text}\n\n"
         f"CURRENT QUARTER'S FULL TRANSCRIPT:\n\n{current_transcript_text}"
     )
-    return _call_claude(TRAJECTORY_SYSTEM_PROMPT, instructions, model=model)
+    if backend == "claude":
+        return _call_claude(TRAJECTORY_SYSTEM_PROMPT, instructions, model=model or DEFAULT_MODEL)
+    elif backend == "nemotron":
+        return _call_nemotron(
+            TRAJECTORY_SYSTEM_PROMPT, instructions, model=model or NEMOTRON_DEFAULT_MODEL, label=label
+        )
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
 
 
 def main():
@@ -53,13 +72,15 @@ def main():
     parser.add_argument("prior_guidance_path", type=Path)
     parser.add_argument("current_transcript_path", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--backend", choices=["claude", "nemotron"], default=DEFAULT_BACKEND)
     args = parser.parse_args()
 
     result = assess_trajectory(
         args.prior_guidance_path.read_text(),
         args.current_transcript_path.read_text(),
         model=args.model,
+        backend=args.backend,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(result)
