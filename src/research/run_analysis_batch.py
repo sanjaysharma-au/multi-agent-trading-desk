@@ -10,9 +10,9 @@ TRANSCRIPT_DIR = Path("data/earnings_calls")
 DEFAULT_OUTPUT_DIR = Path("earnings_call_analysis_v2")
 
 
-def find_transcripts(ticker: str) -> dict[str, Path]:
+def find_transcripts(ticker: str, transcript_dir: Path) -> dict[str, Path]:
     transcripts = {}
-    for p in TRANSCRIPT_DIR.glob(f"{ticker}_*Q*.txt"):
+    for p in transcript_dir.glob(f"{ticker}_*Q*.txt"):
         transcripts[p.stem.replace(f"{ticker}_", "")] = p
     return transcripts
 
@@ -28,12 +28,13 @@ def main():
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--backend", choices=["nemotron", "claude"], default=DEFAULT_BACKEND)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--transcript-dir", type=Path, default=TRANSCRIPT_DIR)
     parser.add_argument("--only-quarter", default=None)
     parser.add_argument("--no-prior-guidance", action="store_true")
     args = parser.parse_args()
     ticker = args.ticker
 
-    transcripts = find_transcripts(ticker)
+    transcripts = find_transcripts(ticker, args.transcript_dir)
     labels = sorted(transcripts, key=quarter_sort_key)
     if args.only_quarter:
         labels = [l for l in labels if l == args.only_quarter]
