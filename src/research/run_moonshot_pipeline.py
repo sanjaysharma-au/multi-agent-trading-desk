@@ -8,6 +8,7 @@ from typing import Callable
 
 from anonymize_transcripts import has_config
 from run_moonshot_batch import find_transcripts, quarter_sort_key, quarter_states
+from agents.moonshot_analyst import PRESS_DIR, press_ledger_is_current
 from score_moonshot import scored_quarters
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -47,8 +48,30 @@ def _outstanding(labels: list[str], done: set[str]) -> list[str]:
     return [l for l in labels if l not in done]
 
 
+def _press_path(ticker: str, label: str) -> Path:
+    return PRESS_DIR / f"{ticker}_{label}.txt"
+
+
+def _unavailable_press(ticker: str) -> set[str]:
+    path = PRESS_DIR / f"_unavailable_{ticker}.txt"
+    return set(path.read_text().split()) if path.exists() else set()
+
+
+def _press_missing(ticker: str) -> list[str]:
+    labels = _labels(ticker, RAW_DIR)
+    if not labels:
+        return ["no transcripts"]
+    skip = _unavailable_press(ticker)
+    return [l for l in labels if not _press_path(ticker, l).exists() and l not in skip]
+
+
 def _complete_calls(ticker: str, transcript_dir: Path, analysis_dir: Path) -> set[str]:
-    return {label for label, state in quarter_states(ticker, transcript_dir, analysis_dir).items() if state == "complete"}
+    return {
+        label for label, state in quarter_states(ticker, transcript_dir, analysis_dir).items()
+        if state == "complete"
+        and (not _press_path(ticker, label).exists()
+             or press_ledger_is_current(analysis_dir / f"{ticker}_{label}", _press_path(ticker, label)))
+    }
 
 
 def _scored(ticker: str, analysis_dir: Path, suffix: str) -> set[str]:
@@ -74,6 +97,8 @@ def build_steps(ticker: str, variants: list[str], args: argparse.Namespace) -> l
     raw_missing: Callable[[], list[str]] = lambda: [] if _labels(ticker, RAW_DIR) else ["no transcripts on disk"]
     fetch_cmd = [py, str(SCRIPTS.parent / "data_pipeline" / "fetch_earnings_transcripts.py"), ticker]
     steps.append(Step("fetch", fetch_cmd, raw_missing))
+    press_cmd = [py, str(SCRIPTS.parent / "data_pipeline" / "fetch_press_releases.py"), ticker]
+    steps.append(Step("press", press_cmd, lambda: _press_missing(ticker)))
 
     for variant in variants:
         cfg = VARIANTS[variant]

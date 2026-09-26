@@ -11,11 +11,14 @@ from agents.earnings_call_analyst import DEFAULT_BACKEND, DEFAULT_MODEL, NIM_MAX
 from agents.moonshot_analyst import (
     OUTPUT_DIR,
     PROVENANCE_FILE,
+    PRESS_DIR,
     analyze_call,
     call_state,
     extract_ledger,
+    extract_press_ledger,
     ledger_is_current,
     make_chain,
+    press_ledger_is_current,
 )
 from agents.moonshot_ledger import LEDGER_FILE
 
@@ -73,6 +76,15 @@ def _extract(ticker: str, label: str, path: Path, model: str, backend: str, outp
         print(f"[{label}] ledger FAILED: {type(e).__name__}: {e}")
 
 
+def _extract_press(ticker: str, label: str, path: Path, model: str, backend: str, output_dir: Path) -> None:
+    print(f"[{label}] extracting press-release figures...")
+    try:
+        out = extract_press_ledger(path, f"{ticker}_{label}", model=model, backend=backend, output_dir=output_dir)
+        print(f"[{label}] press ledger -> {out}")
+    except Exception as e:
+        print(f"[{label}] press ledger FAILED: {type(e).__name__}: {e}")
+
+
 def identity_terms(ticker: str) -> list[str]:
     from anonymize_transcripts import get_config
     cfg = get_config(ticker)
@@ -115,6 +127,9 @@ def main():
     parser.add_argument("--transcript-dir", type=Path, default=TRANSCRIPT_DIR)
     parser.add_argument("--only-quarter", nargs="+", default=None)
     parser.add_argument("--concurrency", type=int, default=None)
+    parser.add_argument("--press-dir", type=Path, default=PRESS_DIR)
+    parser.add_argument("--press-only", action="store_true",
+                        help="only extract figures from the earnings press releases in --press-dir, then stop")
     parser.add_argument("--ledger-backend", choices=["nemotron", "claude"], default="nemotron")
     parser.add_argument("--ledger-model", default=None)
     parser.add_argument("--identity-check", action="store_true",
@@ -147,12 +162,30 @@ def main():
 
     needs_ledger = sorted(set(pending) | {prior[l] for l in pending if prior[l]}, key=quarter_sort_key)
     needs_ledger = [l for l in needs_ledger if not ledger_is_current(args.output_dir / f"{ticker}_{l}", transcripts[l])]
+    if not args.press_only:
+        with ThreadPoolExecutor(max_workers=ledger_workers) as executor:
+            for future in [
+                executor.submit(_extract, ticker, l, transcripts[l], ledger_model, args.ledger_backend, args.output_dir)
+                for l in needs_ledger
+            ]:
+                future.result()
+
+    press_targets = sorted(set(targets) | {prior[l] for l in targets if prior[l]}, key=quarter_sort_key)
+    press_files = {l: args.press_dir / f"{ticker}_{l}.txt" for l in press_targets}
+    needs_press = [
+        l for l, p in press_files.items()
+        if p.exists() and not press_ledger_is_current(args.output_dir / f"{ticker}_{l}", p)
+    ]
+    if needs_press:
+        print(f"{len(needs_press)} quarters need press-release figures extracted")
     with ThreadPoolExecutor(max_workers=ledger_workers) as executor:
         for future in [
-            executor.submit(_extract, ticker, l, transcripts[l], ledger_model, args.ledger_backend, args.output_dir)
-            for l in needs_ledger
+            executor.submit(_extract_press, ticker, l, press_files[l], ledger_model, args.ledger_backend, args.output_dir)
+            for l in needs_press
         ]:
             future.result()
+    if args.press_only:
+        return
 
     states = quarter_states(ticker, args.transcript_dir, args.output_dir)
     ready = []

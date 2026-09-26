@@ -53,6 +53,11 @@ QUOTE_MATCH_FRACTION = 0.6
 
 ANCHOR_RULES_VERSION = "momentum-v2"
 LEDGER_FILE = "ledger.json"
+PRESS_LEDGER_FILE = "press_ledger.json"
+PRESS_SLOTS = [
+    "revenue", "revenue_growth_yoy", "gross_margin", "gaap_operating_income", "gaap_net_income",
+    "adjusted_operating_income", "operating_cash_flow", "free_cash_flow", "cash_and_investments",
+]
 ANCHORS_FILE = "anchors.json"
 
 
@@ -188,6 +193,32 @@ def load_ledger(path: Path) -> dict | None:
     except json.JSONDecodeError:
         return None
     return ledger if isinstance(ledger, dict) and isinstance(ledger.get("figures"), dict) else None
+
+
+def press_slot_catalogue() -> str:
+    return "\n".join(
+        f'- "{name}" ({UNIT_NAMES[SLOTS[name][0]]}): {SLOTS[name][2]}' for name in PRESS_SLOTS
+    )
+
+
+def normalize_press_ledger(raw: dict, press_text: str) -> dict:
+    raw_figures = raw.get("figures") if isinstance(raw.get("figures"), dict) else {}
+    allowed = {k: v for k, v in raw_figures.items() if k in PRESS_SLOTS}
+    ledger = normalize_ledger({"figures": allowed}, press_text)
+    return {"figures": ledger["figures"], "dropped": ledger["dropped"]}
+
+
+def load_merged_ledger(path: Path) -> dict | None:
+    ledger = load_ledger(path)
+    if ledger is None:
+        return None
+    press = load_ledger(path.parent / PRESS_LEDGER_FILE)
+    if press:
+        for slot, entry in press["figures"].items():
+            have = ledger["figures"].get(slot)
+            if entry and entry["verified"] and not (have and have["verified"]):
+                ledger["figures"][slot] = {**entry, "source": "press_release"}
+    return ledger
 
 
 def _verified(ledger: dict | None, slot: str) -> dict | None:
@@ -413,6 +444,8 @@ def render_ledger(ledger: dict) -> str:
             continue
         unit = UNIT_NAMES[SLOTS[slot][0]]
         flag = "" if entry["verified"] else " [UNVERIFIED]"
+        if entry.get("source") == "press_release":
+            flag += " [from the earnings press release, not the call]"
         prior = f", prior stated on call {_fmt(entry['prior_value_stated'], unit)}" if entry["prior_value_stated"] is not None else ""
         lines.append(f"- {slot} = {_fmt(entry['value'], unit)} ({entry['period']}{prior}){flag}; basis: {entry['basis']}; quote: \"{entry['quote']}\"")
     for key, field in [("other_hard_figures", "metric"), ("first_time_achievements", "what"),

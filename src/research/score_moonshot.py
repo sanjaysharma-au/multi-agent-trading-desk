@@ -12,11 +12,12 @@ from agents.moonshot_ledger import (
     ANCHOR_RULES_VERSION,
     ANCHORS_FILE,
     LEDGER_FILE,
+    PRESS_LEDGER_FILE,
     STAGES,
     QuoteChecker,
     compute_anchors,
     file_sha256,
-    load_ledger,
+    load_merged_ledger,
     parse_json_object,
     render_comparison,
     render_gates,
@@ -123,11 +124,11 @@ def _ask(user_input: str, model: str, backend: str, label: str) -> dict:
 def current_anchors(call_dir: Path) -> dict:
     stored = json.loads((call_dir / ANCHORS_FILE).read_text())
     chain = stored["chain"]
-    ledger = load_ledger(call_dir / LEDGER_FILE)
+    ledger = load_merged_ledger(call_dir / LEDGER_FILE)
     prior = None
     if chain["status"] == "linked":
         prior_dir = call_dir.parent / f"{call_dir.name.rsplit('_', 1)[0]}_{chain['prior_quarter']}"
-        prior = load_ledger(prior_dir / LEDGER_FILE)
+        prior = load_merged_ledger(prior_dir / LEDGER_FILE)
         if prior is None:
             return stored
     return compute_anchors(ledger, prior, chain)
@@ -180,7 +181,15 @@ def score_call(call_dir: Path, model: str, backend: str, label: str = "") -> dic
 
 
 def analysis_fingerprint(call_dir: Path) -> str:
-    return f"{file_sha256(call_dir / PROVENANCE_FILE)}:{ANCHOR_RULES_VERSION}"
+    parts = [file_sha256(call_dir / PROVENANCE_FILE), ANCHOR_RULES_VERSION]
+    press = call_dir / PRESS_LEDGER_FILE
+    if press.exists():
+        parts.append(file_sha256(press)[:12])
+    prior = (json.loads((call_dir / PROVENANCE_FILE).read_text()).get("chain") or {}).get("prior_quarter")
+    prior_press = call_dir.parent / f"{call_dir.name.rsplit('_', 1)[0]}_{prior}" / PRESS_LEDGER_FILE if prior else None
+    if prior_press is not None and prior_press.exists():
+        parts.append("p" + file_sha256(prior_press)[:12])
+    return ":".join(parts)
 
 
 def scorable(ticker: str, analysis_dir: Path) -> dict[str, Path]:

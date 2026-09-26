@@ -13,12 +13,16 @@ from agents.moonshot_ledger import (
     ANCHORS_FILE,
     LEDGER_FILE,
     PERIODS,
+    PRESS_LEDGER_FILE,
     SOFT_KINDS,
     compute_anchors,
     file_sha256,
     load_ledger,
+    load_merged_ledger,
     normalize_ledger,
+    normalize_press_ledger,
     parse_json_object,
+    press_slot_catalogue,
     render_comparison,
     render_gates,
     render_ledger,
@@ -29,6 +33,7 @@ OUTPUT_DIR = Path("earnings_call_analysis_v3")
 REPORT_ORDER = ["ambition", "milestones", "runway"]
 PROVENANCE_FILE = "provenance.json"
 LEDGER_ATTEMPTS = 3
+PRESS_DIR = Path("data/press_releases")
 
 BLINDERS = """You do not have access to the stock price or any information beyond the transcript text itself. Do not use any knowledge of this company's price, its later results, or how its story turned out, even if you recall it from training data -- deliberately set that aside. The transcript may be anonymized (Company A, Program 1, Person 2, Y+1 for a year); treat those labels as the real names and do not try to work out who the company is. Reason only from what is said on this call."""
 
@@ -61,6 +66,29 @@ Also list:
 
 Output ONLY one JSON object, no markdown fences and no commentary, of the form:
 {{"figures": {{"revenue": {{"value": 0, "period": "quarter", "scope": "whole_company", "prior_value_stated": null, "basis": "", "quote": ""}}, "gaap_net_income": null, ...}}, "first_time_achievements": [], "other_hard_figures": [], "soft_evidence": [], "receding_evidence": []}}
+"""
+
+PRESS_SYSTEM_PROMPT = f"""You are a figures clerk. You copy figures from a company's quarterly earnings press release (with its financial statement tables) into a ledger. {BLINDERS}
+
+The text was flattened from HTML; table cells are separated by " | ". A statement table usually has one column for the reported quarter (three months ended), further columns for the prior quarter and the year-earlier quarter, and columns for longer periods. Use ONLY the reported quarter's column. Never use a year-to-date, twelve-month or prior-period column.
+
+Rules:
+- Only figures stated in this document. Never compute, estimate or infer a figure that is not written there. Never use outside knowledge.
+- Money in USD millions. Read the table's own unit note ("in millions", "in thousands") and convert: 6,050 in millions -> 6050; 289,400 in thousands -> 289.4. Losses and cash outflows are negative numbers. Percentages as plain numbers (74% -> 74).
+- "period" is "quarter" for the reported quarter and "point_in_time" for balances (cash).
+- "prior_value_stated": the year-earlier or prior-quarter value written next to it in the same row or sentence, in the same units; otherwise null.
+- "basis": a few words saying exactly what the figure is (for example "GAAP net income", "non-GAAP operating income", "net cash provided by operating activities").
+- "quote": the exact words and numbers copied verbatim from the document that state the figure: a table row exactly as it reads (row label and the cells) or a full sentence. Figures whose quote cannot be found in the document are discarded.
+- GAAP versus non-GAAP: put a profit figure in a gaap_ slot only if the document labels it GAAP or presents it in the statement of income without an adjusted qualifier. Non-GAAP operating income goes in adjusted_operating_income.
+- Free cash flow only if the document states it; do not compute it from operating cash flow and capital spending.
+- "scope" is always "whole_company".
+- Use null for any slot not stated in this document.
+
+Slots (the "figures" object must contain every one of these keys):
+{press_slot_catalogue()}
+
+Output ONLY one JSON object, no markdown fences and no commentary, of the form:
+{{"figures": {{"revenue": {{"value": 0, "period": "quarter", "scope": "whole_company", "prior_value_stated": null, "basis": "", "quote": ""}}, "gaap_net_income": null, ...}}}}
 """
 
 AMBITION_SYSTEM_PROMPT = f"""You are an ambition analyst reviewing an earnings call transcript. {BLINDERS}
@@ -180,6 +208,46 @@ def extract_ledger(
     return path
 
 
+def extract_press_ledger(
+    press_path: Path,
+    label: str,
+    model: str = DEFAULT_MODEL,
+    backend: str = DEFAULT_BACKEND,
+    output_dir: Path = OUTPUT_DIR,
+) -> Path:
+    press_text = press_path.read_text()
+    instructions = f"Here is the earnings press release. Output only the JSON ledger.\n\n{press_text}"
+    last_error = None
+    for attempt in range(LEDGER_ATTEMPTS):
+        text = _call_llm(PRESS_SYSTEM_PROMPT, instructions, model=model, backend=backend, label=f"{label}:press")
+        try:
+            raw = parse_json_object(text)
+            break
+        except ValueError as e:
+            last_error = e
+            print(f"[{label}:press] unparseable output (attempt {attempt + 1}/{LEDGER_ATTEMPTS})")
+    else:
+        raise last_error
+    ledger = normalize_press_ledger(raw, press_text)
+    ledger["_meta"] = {
+        "backend": backend,
+        "model": model,
+        "press_release": str(press_path),
+        "press_sha256": file_sha256(press_path),
+        "generated_at": _now(),
+    }
+    out_dir = output_dir / label
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / PRESS_LEDGER_FILE
+    _write_json(path, ledger)
+    return path
+
+
+def press_ledger_is_current(call_dir: Path, press_path: Path) -> bool:
+    ledger = load_ledger(call_dir / PRESS_LEDGER_FILE)
+    return bool(ledger) and ledger.get("_meta", {}).get("press_sha256") == file_sha256(press_path)
+
+
 def make_chain(prior_label: str | None, prior_ledger_path: Path | None, gap_quarters: int = 0) -> dict:
     if prior_label is None:
         return {"status": "first_in_chain", "prior_quarter": None, "prior_ledger_sha256": None, "gap_quarters": 0}
@@ -264,10 +332,10 @@ def analyze_call(
 ) -> Path:
     out_dir = output_dir / label
     ledger_path = out_dir / LEDGER_FILE
-    ledger = load_ledger(ledger_path)
+    ledger = load_merged_ledger(ledger_path)
     if ledger is None:
         raise RuntimeError(f"{label}: no valid {LEDGER_FILE}; extract the ledger first")
-    prior_ledger = load_ledger(prior_ledger_path) if chain["status"] == "linked" else None
+    prior_ledger = load_merged_ledger(prior_ledger_path) if chain["status"] == "linked" else None
     if chain["status"] == "linked" and (prior_ledger is None or file_sha256(prior_ledger_path) != chain["prior_ledger_sha256"]):
         raise RuntimeError(f"{label}: prior ledger changed or vanished while analyzing")
 
@@ -298,6 +366,7 @@ def analyze_call(
             "endpoint": _nim_base_url() if backend == "nemotron" else None,
             "transcript": str(transcript_path),
             "ledger_sha256": file_sha256(ledger_path),
+            "press_ledger_sha256": press_ledger_sha(out_dir),
             "chain": chain,
             "identity_terms_found": None if identity_terms is None else identity_terms_found(
                 output_texts, identity_terms, transcript_text
@@ -307,6 +376,11 @@ def analyze_call(
         },
     )
     return out_dir
+
+
+def press_ledger_sha(call_dir: Path) -> str | None:
+    path = call_dir / PRESS_LEDGER_FILE
+    return file_sha256(path) if path.exists() else None
 
 
 def call_state(call_dir: Path, prior_call_dir: Path | None, transcript_path: Path | None = None) -> str:
@@ -319,6 +393,8 @@ def call_state(call_dir: Path, prior_call_dir: Path | None, transcript_path: Pat
         return "incomplete"
     chain = provenance.get("chain") or {}
     if provenance.get("ledger_sha256") != file_sha256(call_dir / LEDGER_FILE):
+        return "stale"
+    if provenance.get("press_ledger_sha256") != press_ledger_sha(call_dir):
         return "stale"
     if transcript_path is not None and not ledger_is_current(call_dir, transcript_path):
         return "stale"
