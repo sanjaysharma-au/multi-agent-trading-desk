@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agents.earnings_call_analyst import DEFAULT_BACKEND, DEFAULT_MODEL, _call_llm
 
-from anonymize_transcripts import GENERATED_CONFIG_DIR, TRANSCRIPT_DIR
+from anonymize_transcripts import GENERATED_CONFIG_DIR, TRANSCRIPT_DIR, get_config, has_config
 from suggest_anonymize_config import gather_candidates
 
 SNIPPET_RADIUS = 60
@@ -87,6 +87,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=GENERATED_CONFIG_DIR)
     parser.add_argument("--backend", choices=["nemotron", "claude"], default=DEFAULT_BACKEND)
     parser.add_argument("--model", default=None)
+    parser.add_argument("--audit", action="store_true",
+                        help="compare the LLM's picks with the ticker's existing config and print what the config lacks")
     args = parser.parse_args()
     ticker = args.ticker.upper()
 
@@ -96,6 +98,23 @@ def main():
     model = args.model or (DEFAULT_MODEL if args.backend == "nemotron" else "sonnet")
 
     config = generate_config(ticker, files, model, args.backend)
+    if args.audit:
+        if not has_config(ticker):
+            raise SystemExit(f"no existing config for {ticker} to audit against")
+        existing = get_config(ticker)
+        covered = {a.lower() for a in existing["company"]} | {
+            a.lower() for aliases in existing["programs"].values() for a in aliases
+        }
+        missing = {
+            canonical: [a for a in aliases if a.lower() not in covered]
+            for canonical, aliases in config["programs"].items()
+        }
+        missing = {canonical: aliases for canonical, aliases in missing.items() if aliases}
+        print(f"{ticker}: the model picked {sum(len(a) for a in config['programs'].values())} identifying terms; "
+              f"{sum(len(a) for a in missing.values())} are not in the existing config")
+        for canonical, aliases in missing.items():
+            print(f"  {canonical}: {', '.join(aliases)}")
+        return
     args.output_dir.mkdir(parents=True, exist_ok=True)
     out_path = args.output_dir / f"{ticker}.json"
     out_path.write_text(json.dumps(config, indent=2) + "\n")

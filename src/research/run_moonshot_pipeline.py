@@ -174,10 +174,11 @@ def main():
         "completed work is detected from the output files and skipped."
     )
     parser.add_argument("ticker")
-    parser.add_argument("--variants", nargs="+", choices=sorted(VARIANTS), default=["anon", "identified"])
+    parser.add_argument("--variants", nargs="+", choices=sorted(VARIANTS), default=["identified"],
+                        help="the anon variant is not blind (see probe_identity_recognition.py), so it is off by default")
     parser.add_argument("--backend", choices=["nemotron", "claude"], default="nemotron")
     parser.add_argument("--model", default=None, help="analysis model")
-    parser.add_argument("--ledger-backend", choices=["nemotron", "claude"], default="claude")
+    parser.add_argument("--ledger-backend", choices=["nemotron", "claude"], default="nemotron")
     parser.add_argument("--ledger-model", default=None)
     parser.add_argument("--score-backend", choices=["nemotron", "claude"], default="claude")
     parser.add_argument("--score-model", default=None)

@@ -97,8 +97,11 @@ def _analyze(
             model=model, backend=backend, output_dir=output_dir, identity_terms=terms,
         )
         _log_progress(progress_log, lock, label)
-        leaks = json.loads((out_dir / PROVENANCE_FILE).read_text()).get("identity_terms_found")
-        print(f"[{label}] -> {out_dir}{f'  WARNING identity terms in output: {leaks}' if leaks else ''}")
+        provenance = json.loads((out_dir / PROVENANCE_FILE).read_text())
+        leaks, novel = provenance.get("identity_terms_found"), provenance.get("novel_proper_nouns")
+        print(f"[{label}] -> {out_dir}"
+              f"{f'  WARNING identity terms not in transcript: {leaks}' if leaks else ''}"
+              f"{f'  novel proper nouns: {novel}' if novel else ''}")
     except Exception as e:
         print(f"[{label}] FAILED: {type(e).__name__}: {e}")
 
@@ -112,7 +115,7 @@ def main():
     parser.add_argument("--transcript-dir", type=Path, default=TRANSCRIPT_DIR)
     parser.add_argument("--only-quarter", nargs="+", default=None)
     parser.add_argument("--concurrency", type=int, default=None)
-    parser.add_argument("--ledger-backend", choices=["nemotron", "claude"], default="claude")
+    parser.add_argument("--ledger-backend", choices=["nemotron", "claude"], default="nemotron")
     parser.add_argument("--ledger-model", default=None)
     parser.add_argument("--identity-check", action="store_true",
                         help="record any of the ticker's anonymized names that appear in the outputs (for anonymized runs)")

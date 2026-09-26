@@ -193,9 +193,63 @@ def make_chain(prior_label: str | None, prior_ledger_path: Path | None, gap_quar
     }
 
 
-def identity_terms_found(texts: list[str], terms: list[str]) -> list[str]:
+NOVEL_TERM_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*\b")
+NOVEL_TERM_STOPLIST = {
+    "yoy", "qoq", "fcf", "ndr", "nrr", "ttm", "ltm", "ytd", "atm", "cro", "sbc", "gaap", "rpo", "arr", "mrr", "tcv", "acv",
+    "tam", "usd", "eps", "ceo", "cfo", "coo", "cto", "sec", "ebit", "ebitda", "capex", "opex", "kpi", "json", "llm", "llms",
+    "nan", "pre_proof", "early_proof", "t12m", "covid", "ipo", "smb", "dna", "sdk", "mom", "arpu", "dpo", "kyc", "evs", "spacs",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december", "monday", "tuesday", "wednesday", "thursday", "friday",
+}
+TRANSCRIPT_ROOT = Path("data/earnings_calls")
+_vocabulary_cache: dict[str, set[str]] = {}
+
+
+def _lower_words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z][a-z'-]*", text.lower()))
+
+
+def _prompt_vocabulary() -> set[str]:
+    words = _lower_words(LEDGER_SYSTEM_PROMPT)
+    for prompt in SPECIALISTS.values():
+        words |= _lower_words(prompt)
+    return words
+
+
+def _corpus_vocabulary(ticker: str) -> set[str]:
+    if ticker not in _vocabulary_cache:
+        words: set[str] = set()
+        for f in TRANSCRIPT_ROOT.glob("*_*Q*.txt"):
+            if not f.name.startswith(f"{ticker}_"):
+                words.update(re.findall(r"\b[a-z][a-z'-]*\b", f.read_text()))
+        _vocabulary_cache[ticker] = words
+    return _vocabulary_cache[ticker]
+
+
+def identity_terms_found(texts: list[str], terms: list[str], transcript_text: str | None = None) -> list[str]:
     joined = "\n".join(texts)
-    return sorted({t for t in terms if re.search(rf"\b{re.escape(t)}\b", joined, flags=re.IGNORECASE)})
+    found = set()
+    for t in terms:
+        if not re.search(rf"\b{re.escape(t)}\b", joined, flags=re.IGNORECASE):
+            continue
+        if transcript_text and all(
+            re.search(rf"\b{re.escape(word)}\b", transcript_text, flags=re.IGNORECASE) for word in t.split()
+        ):
+            continue
+        found.add(t)
+    return sorted(found)
+
+
+def novel_proper_nouns(texts: list[str], transcript_text: str, ticker: str = "") -> list[str]:
+    joined = "\n".join(texts)
+    known = _lower_words(transcript_text) | _prompt_vocabulary() | _corpus_vocabulary(ticker) | NOVEL_TERM_STOPLIST
+    lowercase_in_output = set(re.findall(r"\b[a-z][a-z'-]*\b", joined))
+    novel = set()
+    for term in NOVEL_TERM_RE.findall(joined):
+        parts = [p for p in term.split("-") if len(p) >= 3 and not p.isdigit()]
+        if any(p.lower() not in known and p.lower() not in lowercase_in_output for p in parts):
+            novel.add(term)
+    return sorted(novel)
 
 
 def analyze_call(
@@ -232,6 +286,7 @@ def analyze_call(
         for name, prompt in SPECIALISTS.items()
     }
 
+    output_texts = [*reports.values(), json.dumps({k: v for k, v in ledger.items() if k != "_meta"})]
     for name, text in reports.items():
         (out_dir / f"{name}.md").write_text(text)
     _write_json(out_dir / ANCHORS_FILE, anchors)
@@ -245,8 +300,9 @@ def analyze_call(
             "ledger_sha256": file_sha256(ledger_path),
             "chain": chain,
             "identity_terms_found": None if identity_terms is None else identity_terms_found(
-                [*reports.values(), json.dumps({k: v for k, v in ledger.items() if k != "_meta"})], identity_terms
+                output_texts, identity_terms, transcript_text
             ),
+            "novel_proper_nouns": novel_proper_nouns(output_texts, transcript_text, label.rsplit("_", 1)[0]),
             "generated_at": _now(),
         },
     )

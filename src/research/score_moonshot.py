@@ -220,7 +220,9 @@ def _process_call(
         scores["quarter"] = label
         scores["analysis_fingerprint"] = analysis_fingerprint(call_dir)
         scores["scorer"] = {"backend": backend, "model": model}
-        scores["identity_terms_found"] = json.loads((call_dir / PROVENANCE_FILE).read_text()).get("identity_terms_found")
+        provenance = json.loads((call_dir / PROVENANCE_FILE).read_text())
+        scores["identity_terms_found"] = provenance.get("identity_terms_found")
+        scores["novel_proper_nouns"] = provenance.get("novel_proper_nouns")
         with write_lock:
             with out_path.open("a") as out:
                 out.write(json.dumps(scores) + "\n")
