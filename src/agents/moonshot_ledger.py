@@ -38,16 +38,20 @@ PROXIMITY_TIERS = {
     "T4_gaap_and_fcf_positive_repeatable": (50, 100, "GAAP profitable, free-cash-flow positive, with a repeatable, growing revenue base"),
 }
 NO_REPEATABLE_BASE_CAP = 45
-MIN_COMPARISONS_FOR_BASIS = 3
 MOMENTUM_BAND_HALF_WIDTH = 20
 MOMENTUM_BAND_NO_BASIS = (-30, 30)
 PCT_UNCHANGED_POINTS = 1.0
 LEVEL_UNCHANGED_FRACTION = 0.02
-WEIGHTS = {"level": 1, "rate": 2, "profit": 2}
-SIGN_FLIP_WEIGHT = 3
+WEIGHTS = {"level": 1, "rate": 3, "profit": 3}
+SIGN_FLIP_WEIGHT = 6
+RATE_SCALE = 0.10
+PROFIT_SCALE = 2.0
+LEVEL_SCALE = 4.0
+SHRINK_PRIOR_WEIGHT = 6
 QUOTE_SHINGLE = 5
 QUOTE_MATCH_FRACTION = 0.6
 
+ANCHOR_RULES_VERSION = "momentum-v2"
 LEDGER_FILE = "ledger.json"
 ANCHORS_FILE = "anchors.json"
 
@@ -198,12 +202,25 @@ def _value(ledger: dict | None, slot: str) -> float | None:
     return entry["value"] if entry else None
 
 
+def _clip(value: float) -> float:
+    return max(-1.0, min(1.0, value))
+
+
+def _row_score(kind: str, current: float, prior: float) -> tuple[float, int]:
+    if kind == "rate":
+        return _clip((current - prior) * RATE_SCALE), WEIGHTS[kind]
+    if kind == "profit" and (prior <= 0 < current or current <= 0 < prior):
+        return (1.0 if current > 0 else -1.0), SIGN_FLIP_WEIGHT
+    relative = (current - prior) / max(abs(prior), 1e-9)
+    return _clip(relative * (PROFIT_SCALE if kind == "profit" else LEVEL_SCALE)), WEIGHTS[kind]
+
+
 def compare_ledgers(current: dict, prior: dict | None) -> list[dict]:
     rows = []
     for slot, (unit, kind, _) in SLOTS.items():
         cur, pri = _verified(current, slot), _verified(prior, slot)
         row = {"slot": slot, "unit": UNIT_NAMES[unit], "current": cur and cur["value"], "current_period": cur and cur["period"],
-               "prior": pri and pri["value"], "prior_period": pri and pri["period"], "direction": None, "weight": 0}
+               "prior": pri and pri["value"], "prior_period": pri and pri["period"], "direction": None, "weight": 0, "score": 0.0}
         if cur is None and pri is None:
             continue
         if cur is None or pri is None:
@@ -212,30 +229,29 @@ def compare_ledgers(current: dict, prior: dict | None) -> list[dict]:
             row["direction"] = "not_comparable_period"
         else:
             c, p = cur["value"], pri["value"]
+            score, weight = _row_score(kind, c, p)
+            row["weight"] = weight
             if kind == "profit" and (p <= 0 < c or c <= 0 < p):
                 row["direction"] = "turned_positive" if c > 0 else "turned_negative"
-                row["weight"] = SIGN_FLIP_WEIGHT
+                row["score"] = score
             else:
                 if unit == "pct":
                     unchanged = abs(c - p) < PCT_UNCHANGED_POINTS
                 else:
                     unchanged = abs(c - p) <= LEVEL_UNCHANGED_FRACTION * max(abs(p), 1e-9)
                 row["direction"] = "unchanged" if unchanged else ("improved" if c > p else "worsened")
-                row["weight"] = WEIGHTS[kind]
+                row["score"] = 0.0 if unchanged else score
         rows.append(row)
     return rows
 
 
-def _sign(direction: str) -> int:
-    return {"improved": 1, "turned_positive": 1, "worsened": -1, "turned_negative": -1}.get(direction, 0)
-
-
 def momentum_basis(rows: list[dict]) -> tuple[int | None, int]:
     compared = [r for r in rows if r["weight"]]
-    if len(compared) < MIN_COMPARISONS_FOR_BASIS:
-        return None, len(compared)
     total = sum(r["weight"] for r in compared)
-    return round(100 * sum(r["weight"] * _sign(r["direction"]) for r in compared) / total), len(compared)
+    if not total:
+        return None, 0
+    raw = sum(r["weight"] * r["score"] for r in compared) / total
+    return round(100 * raw * total / (total + SHRINK_PRIOR_WEIGHT)), len(compared)
 
 
 def _grew(ledger: dict, prior: dict | None, slot: str) -> bool:

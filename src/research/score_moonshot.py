@@ -9,10 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agents.earnings_call_analyst import DEFAULT_MODEL, NIM_MAX_CONCURRENCY, _call_llm
 from agents.moonshot_analyst import PROVENANCE_FILE, REPORT_ORDER, call_state
 from agents.moonshot_ledger import (
+    ANCHOR_RULES_VERSION,
     ANCHORS_FILE,
+    LEDGER_FILE,
     STAGES,
     QuoteChecker,
+    compute_anchors,
     file_sha256,
+    load_ledger,
     parse_json_object,
     render_comparison,
     render_gates,
@@ -116,9 +120,22 @@ def _ask(user_input: str, model: str, backend: str, label: str) -> dict:
     raise last_error
 
 
+def current_anchors(call_dir: Path) -> dict:
+    stored = json.loads((call_dir / ANCHORS_FILE).read_text())
+    chain = stored["chain"]
+    ledger = load_ledger(call_dir / LEDGER_FILE)
+    prior = None
+    if chain["status"] == "linked":
+        prior_dir = call_dir.parent / f"{call_dir.name.rsplit('_', 1)[0]}_{chain['prior_quarter']}"
+        prior = load_ledger(prior_dir / LEDGER_FILE)
+        if prior is None:
+            return stored
+    return compute_anchors(ledger, prior, chain)
+
+
 def score_call(call_dir: Path, model: str, backend: str, label: str = "") -> dict:
     reports = load_reports(call_dir)
-    anchors = json.loads((call_dir / ANCHORS_FILE).read_text())
+    anchors = current_anchors(call_dir)
     sections = "\n\n".join(f"=== {name.upper()} REPORT ===\n{text}" for name, text in reports.items())
     user_input = (
         f"GATES (binding):\n{render_gates(anchors)}\n\n"
@@ -163,7 +180,7 @@ def score_call(call_dir: Path, model: str, backend: str, label: str = "") -> dic
 
 
 def analysis_fingerprint(call_dir: Path) -> str:
-    return file_sha256(call_dir / PROVENANCE_FILE)
+    return f"{file_sha256(call_dir / PROVENANCE_FILE)}:{ANCHOR_RULES_VERSION}"
 
 
 def scorable(ticker: str, analysis_dir: Path) -> dict[str, Path]:
