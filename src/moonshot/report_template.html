@@ -20,6 +20,8 @@
   --band: rgba(42,120,214,0.10);
   --up: #006300;
   --down: #d03b3b;
+  --up-bg: rgba(0,99,0,0.08);
+  --down-bg: rgba(208,59,59,0.08);
   --hover: rgba(11,11,11,0.04);
 }
 @media (prefers-color-scheme: dark) {
@@ -28,7 +30,7 @@
     --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --select: #d95926; --band: rgba(57,135,229,0.16);
-    --up: #0ca30c; --down: #e66767; --hover: rgba(255,255,255,0.05);
+    --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
   }
 }
 :root[data-theme="dark"] {
@@ -36,7 +38,7 @@
   --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
   --series-1: #3987e5; --select: #d95926; --band: rgba(57,135,229,0.16);
-  --up: #0ca30c; --down: #e66767; --hover: rgba(255,255,255,0.05);
+  --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -77,6 +79,24 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: va
 .up { color: var(--up); } .down { color: var(--down); }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; margin: 4px 0 6px; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--axis); }
+.seg button[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.detail-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px 12px; flex-wrap: wrap; }
+.score-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+.score-badge.up { color: var(--up); background: var(--up-bg); }
+.score-badge.down { color: var(--down); background: var(--down-bg); }
+.score-rationale { font-style: italic; }
+.fund-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
+.fund-head h3 { font-size: 13px; margin: 0; }
+.qwrap { overflow: auto; max-height: 260px; margin-top: 10px; border-top: 1px solid var(--grid); }
+.qwrap table { font-size: 12px; }
+.qwrap th { cursor: default; }
+.qwrap tbody tr { cursor: default; }
+.qwrap tr.inrun td { background: var(--band); }
+.qwrap a { color: var(--series-1); text-decoration: none; margin-right: 10px; }
+.qwrap a:hover { text-decoration: underline; }
 .legend i.band { border-radius: 2px; background: var(--band); border: 1px solid var(--series-1); }
 </style>
 </head>
@@ -93,10 +113,28 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: va
       <div class="plot" id="scatter"></div>
     </div>
     <div class="card">
-      <h2 id="detail-title">Price history</h2>
-      <p class="note" id="detail-note">Adjusted close, weekly, log scale. The shaded area is the run from start to peak.</p>
+      <div class="detail-head">
+        <h2 id="detail-title">Price history</h2>
+        <div class="score-badge" id="score-badge" hidden></div>
+      </div>
+      <p class="note score-rationale" id="score-rationale" hidden></p>
+      <p class="note" id="detail-note">Adjusted close, weekly, log scale. The shaded area is the run from start to peak. Ticks on the baseline mark earnings announcements.</p>
       <div class="legend"><span><i style="background:var(--series-1)"></i>Adjusted close</span><span><i class="band"></i>Run window</span></div>
       <div class="plot" id="detail"></div>
+      <div id="fund-wrap">
+        <div class="fund-head">
+          <h3>Quarterly results, plotted on announcement date</h3>
+          <div class="seg" id="fund-metric" role="group" aria-label="Fundamental metric">
+            <button data-k="revenue" aria-pressed="true">Revenue</button><button data-k="revenue_yoy_pct" aria-pressed="false">Revenue YoY</button><button data-k="eps" aria-pressed="false">EPS</button><button data-k="net_income" aria-pressed="false">Net income</button>
+          </div>
+        </div>
+        <p class="note" id="fund-note">Each bar is one quarter, placed on the day results were announced (the 8-K earnings release), not the day the quarter ended. Source: SEC EDGAR.</p>
+        <div class="plot" id="fund"></div>
+        <p class="note">Click a bar to open that quarter's press release. Shaded rows were announced during the run. * = no 8-K found, so the 10-Q/10-K filing date is used.</p>
+        <div class="qwrap"><table id="qtable"><thead><tr>
+          <th>Quarter ended</th><th>Announced</th><th class="num">Revenue</th><th class="num">YoY</th><th class="num">EPS</th><th class="num">Net income</th><th>Documents</th>
+        </tr></thead><tbody></tbody></table></div>
+      </div>
     </div>
   </section>
   <section class="card">
@@ -118,7 +156,44 @@ let filterText = "";
 const fmtX = v => v == null ? "–" : (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + "×";
 const fmtPrice = v => v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toPrecision(3));
 const fmtTick = v => (v >= 1 ? String(+v.toFixed(0)) : String(+v.toPrecision(2))) + "×";
+const fmtMoney = v => { if (v == null) return "–"; if (v === 0) return "$0"; const a = Math.abs(v), sg = v < 0 ? "-" : "";
+  return sg + (a >= 1e9 ? "$" + (a / 1e9).toFixed(a >= 1e10 ? 1 : 2) + "B" : a >= 1e6 ? "$" + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M" : "$" + (a / 1e3).toFixed(0) + "K"); };
+const fmtEps = v => v == null ? "–" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+const FUND = DATA.fundamentals || {};
+const METRICS = {
+  revenue: ["Revenue", fmtMoney], revenue_yoy_pct: ["Revenue YoY", v => fmtPct(v)],
+  eps: ["Diluted EPS", fmtEps], net_income: ["Net income", fmtMoney],
+};
+let fundMetric = "revenue";
+let detailScale = null;
+function niceTicks(lo, hi, n = 4) {
+  const span = hi - lo || 1, raw = span / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(k => k * mag).find(k => span / k <= n) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+function yearTicks(svg, X, t0, t1, W, m, yPos) {
+  const yrA = new Date(t0).getUTCFullYear(), yrB = new Date(t1).getUTCFullYear();
+  const step = Math.max(1, Math.ceil((yrB - yrA + 1) / Math.max(2, Math.floor((W - m.l - m.r) / 70))));
+  for (let y = yrA + 1; y <= yrB; y += step) txt(svg, X(Date.UTC(y, 0, 1)), yPos, String(y), { "text-anchor": "middle" });
+}
 const fmtPct = v => v == null ? "–" : (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+const scoreBand = v => v == null ? null : v > 50 ? "Moonshot signal" : v > 0 ? "Improving" : v === 0 ? "Neutral"
+  : v >= -50 ? "Weakening" : "Distress risk";
+function renderScoreBadge(r) {
+  const badge = document.getElementById("score-badge"), note = document.getElementById("score-rationale");
+  const v = r ? r.nemotron_score : null;
+  if (v == null || Number.isNaN(v)) { badge.hidden = true; note.hidden = true; return; }
+  badge.hidden = false;
+  badge.className = "score-badge" + (v > 0 ? " up" : v < 0 ? " down" : "");
+  badge.textContent = `Fundamentals score ${v > 0 ? "+" : ""}${v} · ${scoreBand(v)}`;
+  if (r.nemotron_rationale) {
+    note.hidden = false;
+    note.textContent = "Nemotron, blind to price: " + r.nemotron_rationale;
+  } else {
+    note.hidden = true;
+  }
+}
 const fmtCap = v => v == null ? "–" : v >= 1e12 ? "$" + (v / 1e12).toFixed(1) + "T" : v >= 1e9 ? "$" + (v / 1e9).toFixed(1) + "B" : "$" + (v / 1e6).toFixed(0) + "M";
 const fmtDate = ms => new Date(ms).toISOString().slice(0, 10);
 const median = a => { const s = a.filter(v => v != null).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
@@ -181,7 +256,7 @@ function matches(r) {
 function renderScatter() {
   const plot = document.getElementById("scatter");
   plot.replaceChildren();
-  const W = plot.clientWidth, H = 330, m = { t: 24, r: 14, b: 34, l: 46 };
+  const W = plot.clientWidth, H = Object.keys(FUND).length ? 520 : 330, m = { t: 24, r: 14, b: 34, l: 46 };
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Scatter of peak multiple versus current multiple" }, plot);
   const pts = rows.filter(r => r.multiple > 0 && r.current_multiple > 0);
   if (!pts.length) return;
@@ -240,6 +315,7 @@ function renderScatter() {
       ["peak multiple", fmtX(r.multiple)],
       ["multiple today", fmtX(r.current_multiple)],
       ["run", `${r.start_date} → ${r.peak_date}`],
+      ...(r.nemotron_score != null ? [["fundamentals score", (r.nemotron_score > 0 ? "+" : "") + r.nemotron_score]] : []),
     ]);
   });
   svg.addEventListener("pointerleave", () => { tip.style.display = "none"; hl.setAttribute("visibility", "hidden"); });
@@ -252,12 +328,13 @@ function renderDetail() {
   plot.replaceChildren();
   const r = rows.find(x => x.ticker === selected);
   const title = document.getElementById("detail-title");
-  if (!r) { title.textContent = "Price history"; return; }
+  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); return; }
   title.textContent = `${r.ticker}${r.name ? " · " + r.name : ""}`;
+  renderScoreBadge(r);
   const s = series[r.ticker];
   const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
-  if (!s || !s.d.length) { txt(svg, W / 2, H / 2, "No cached price history for this ticker", { "text-anchor": "middle" }); return; }
+  if (!s || !s.d.length) { detailScale = null; renderFund(r); txt(svg, W / 2, H / 2, "No cached price history for this ticker", { "text-anchor": "middle" }); return; }
   const t = s.d.map(d => d * DAY), p = s.p;
   const pos = p.filter(v => v > 0);
   const y0 = Math.min(...pos, r.start_price) * 0.85, y1 = Math.max(...pos, r.peak_price) * 1.15;
@@ -266,10 +343,13 @@ function renderDetail() {
     el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)" }, svg);
     txt(svg, m.l - 6, Y(v) + 4, fmtPrice(v), { "text-anchor": "end" });
   }
-  const yrA = new Date(t[0]).getUTCFullYear(), yrB = new Date(t[t.length - 1]).getUTCFullYear();
-  const step = Math.max(1, Math.ceil((yrB - yrA + 1) / Math.max(2, Math.floor((W - m.l - m.r) / 70))));
-  for (let y = yrA + 1; y <= yrB; y += step) txt(svg, X(Date.UTC(y, 0, 1)), H - m.b + 16, String(y), { "text-anchor": "middle" });
+  yearTicks(svg, X, t[0], t[t.length - 1], W, m, H - m.b + 16);
   el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }, svg);
+  for (const a of (FUND[r.ticker]?.a || [])) {
+    const ta = a * DAY; if (ta < t[0] || ta > t[t.length - 1]) continue;
+    el("line", { x1: X(ta), x2: X(ta), y1: H - m.b, y2: H - m.b - 6, stroke: "var(--muted)", "stroke-width": 1.5 }, svg);
+  }
+  detailScale = { t0: t[0], t1: t[t.length - 1], W, m: { ...m }, ts: Date.parse(r.start_date), tp: Date.parse(r.peak_date) };
 
   const ts = Date.parse(r.start_date), tp = Date.parse(r.peak_date);
   el("rect", { x: X(ts), y: m.t, width: Math.max(1, X(tp) - X(ts)), height: H - m.b - m.t, fill: "var(--band)" }, svg);
@@ -307,7 +387,120 @@ function renderDetail() {
     ]);
   });
   svg.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+  renderFund(r);
+  renderQuarterTable(r);
 }
+
+// ---------- fundamentals (same x scale as the price chart) ----------
+function renderFund(r) {
+  const plot = document.getElementById("fund");
+  plot.replaceChildren();
+  const f = r && FUND[r.ticker];
+  document.getElementById("fund-wrap").style.display = DATA.fundamentals ? "" : "none";
+  const W = plot.clientWidth, H = 190;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Quarterly ${METRICS[fundMetric][0]} for ${r ? r.ticker : ""}` }, plot);
+  if (!f || !detailScale) {
+    const top = DATA.fundamentals_top;
+    txt(svg, W / 2, H / 2, r && top && !(r.ticker in FUND) && rows.findIndex(x => x.ticker === r.ticker) >= top
+      ? `Fundamentals are loaded for the top ${top} stocks by multiple only`
+      : "No SEC quarterly data for this stock (e.g. foreign filer or no XBRL filings)", { "text-anchor": "middle" });
+    return;
+  }
+  const { t0, t1, ts, tp } = detailScale, m = { ...detailScale.m, t: 10, b: 26 };
+  const X = linScale(t0, t1, m.l, W - m.r);
+  const [label, fmt] = METRICS[fundMetric];
+  const q = f.a.map((a, i) => ({ t: a * DAY, pe: f.pe[i] * DAY, src: f.src[i], v: f[fundMetric][i], i }))
+    .filter(d => d.v != null && d.t >= t0 && d.t <= t1);
+  el("rect", { x: X(ts), y: m.t, width: Math.max(1, X(tp) - X(ts)), height: H - m.b - m.t, fill: "var(--band)" }, svg);
+  yearTicks(svg, X, t0, t1, W, m, H - m.b + 16);
+  if (!q.length) { txt(svg, W / 2, H / 2, `No ${label.toLowerCase()} reported in this period`, { "text-anchor": "middle" }); return; }
+
+  const vals = q.map(d => d.v);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  // Clip extreme YoY outliers so one quarter does not flatten the rest.
+  if (fundMetric === "revenue_yoy_pct") { hi = Math.min(hi, 400); lo = Math.max(lo, -100); }
+  const ticks = niceTicks(lo, hi);
+  lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  const Y = linScale(lo, hi, H - m.b, m.t);
+  const fmtAxis = fundMetric === "revenue_yoy_pct" ? v => v + "%" : fundMetric === "eps" ? fmtEps : fmtMoney;
+  for (const v of ticks) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)" }, svg);
+    txt(svg, m.l - 6, Y(v) + 4, fmtAxis(v), { "text-anchor": "end" });
+  }
+  const bw = Math.max(2, Math.min(14, (X(t0 + 91 * DAY) - X(t0)) * 0.6));
+  const y0 = Y(0);
+  const bars = [];
+  for (const d of q) {
+    const vy = Y(Math.max(lo, Math.min(hi, d.v)));
+    const top = Math.min(vy, y0), h = Math.max(1, Math.abs(vy - y0));
+    const b = el("rect", { x: X(d.t) - bw / 2, y: top, width: bw, height: h, rx: Math.min(2, bw / 3),
+      fill: d.v < 0 ? "var(--down)" : "var(--series-1)" }, svg);
+    const link = f.links?.[d.i] || {};
+    if (link.release || link.filing) b.style.cursor = "pointer";
+    bars.push([X(d.t), d, b]);
+  }
+  const tip = document.createElement("div"); tip.className = "tip"; plot.appendChild(tip);
+  let active = null;
+  svg.addEventListener("pointermove", e => {
+    const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    let best = null, bd = Infinity;
+    for (const s of bars) { const dd = Math.abs(s[0] - px); if (dd < bd) { bd = dd; best = s; } }
+    if (!best || bd > 20) { tip.style.display = "none"; if (active) active.removeAttribute("stroke"); active = null; return; }
+    if (active) active.removeAttribute("stroke");
+    active = best[2]; active.setAttribute("stroke", "var(--ink)"); active.setAttribute("stroke-width", "1.5");
+    const d = best[1], lines = [["Quarter ended " + fmtDate(d.pe)], [label.toLowerCase(), fmt(d.v)]];
+    if (fundMetric === "revenue" && f.revenue_yoy_pct[d.i] != null) lines.push(["YoY", fmtPct(f.revenue_yoy_pct[d.i])]);
+    lines.push(["announced", fmtDate(d.t) + (d.src === "8-K" ? " (8-K)" : " (10-Q/K filing)")]);
+    const link = f.links?.[d.i] || {};
+    if (link.release) lines.push(["", "Click to open the press release"]);
+    else if (link.filing) lines.push(["", "Click to open the filing"]);
+    tipShow(tip, plot, best[0] * b.width / W, Y(Math.max(0, Math.min(hi, d.v))) * b.height / H, lines);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; if (active) active.removeAttribute("stroke"); active = null; });
+  svg.addEventListener("click", () => {
+    if (!active) return;
+    const hit = bars.find(s => s[2] === active);
+    const link = hit && (f.links?.[hit[1].i] || {});
+    const url = link && (link.release || link.filing);
+    if (url) window.open(url, "_blank", "noopener");
+  });
+}
+
+function renderQuarterTable(r) {
+  const tbody = document.querySelector("#qtable tbody");
+  tbody.replaceChildren();
+  const f = r && FUND[r.ticker];
+  if (!f) return;
+  const ts = Date.parse(r.start_date), tp = Date.parse(r.peak_date);
+  const cell = (tr, text, num) => { const td = document.createElement("td"); td.textContent = text; if (num) td.className = "num"; tr.appendChild(td); return td; };
+  for (let i = f.a.length - 1; i >= 0; i--) {
+    const tr = document.createElement("tr");
+    const ta = f.a[i] * DAY;
+    if (ta >= ts && ta <= tp) tr.className = "inrun";
+    cell(tr, fmtDate(f.pe[i] * DAY));
+    cell(tr, fmtDate(ta) + (f.src[i] === "8-K" ? "" : " *"));
+    cell(tr, fmtMoney(f.revenue[i]), true);
+    const yoy = cell(tr, fmtPct(f.revenue_yoy_pct[i]), true);
+    if (f.revenue_yoy_pct[i] != null) yoy.classList.add(f.revenue_yoy_pct[i] >= 0 ? "up" : "down");
+    cell(tr, fmtEps(f.eps[i]), true);
+    cell(tr, fmtMoney(f.net_income[i]), true);
+    const docs = cell(tr, "");
+    const link = f.links?.[i] || {};
+    for (const [key, label] of [["release", "Press release"], ["commentary", "Commentary"], ["filing", "Filing"]]) {
+      if (!link[key]) continue;
+      const a = document.createElement("a");
+      a.href = link[key]; a.target = "_blank"; a.rel = "noopener"; a.textContent = label;
+      docs.appendChild(a);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+document.querySelectorAll("#fund-metric button").forEach(btn => btn.addEventListener("click", () => {
+  fundMetric = btn.dataset.k;
+  document.querySelectorAll("#fund-metric button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  renderFund(rows.find(x => x.ticker === selected));
+}));
 
 // ---------- table ----------
 const COLS = [
@@ -316,6 +509,8 @@ const COLS = [
   ["current_multiple", "Today ×", "num", fmtX], ["last_vs_peak_pct", "Now vs peak", "num", fmtPct],
 ];
 if (rows.some(r => r.sector)) COLS.push(["sector", "Sector", "str"], ["market_cap", "Mkt cap", "num", fmtCap]);
+const hasScores = rows.some(r => r.nemotron_score != null);
+if (hasScores) COLS.push(["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v]);
 let sortKey = "multiple", sortDir = -1;
 
 function renderTable() {
@@ -346,6 +541,7 @@ function renderTable() {
       if (key === "name") td.className = "name";
       if (key === "ticker") td.style.fontWeight = "600";
       if (key === "current_multiple" && v != null) td.classList.add(v >= 1 ? "up" : "down");
+      if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
       tr.appendChild(td);
     }
     tr.addEventListener("click", () => select(r.ticker, false));

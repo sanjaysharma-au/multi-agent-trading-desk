@@ -30,6 +30,62 @@ The report is one self-contained HTML file with no server and no internet needed
 
 It uses the cached prices in `data/prices/`, so build it on the same machine as the scan.
 
+### Fundamentals
+Below the price chart, a second panel shows each stock's quarterly **revenue, revenue YoY growth, diluted EPS or net income**. It shares the price chart's timeline.
+- **Placement:** each quarter sits on the date its results were **announced**, not on the date the quarter ended. That date is the first 8-K with item 2.02 (the earnings release) filed after the quarter ended. If no 8-K is found, the 10-Q/10-K filing date is used, and the tooltip says which source applied.
+- **Announcement ticks:** small marks on the price chart's baseline show every announcement.
+- **Source:** SEC EDGAR, free with no API key, covering about 2009 onward. Data is fetched only for the stocks in the scan results and cached in `data/sec/` for 7 days.
+- **Q4:** Q4 values are derived as the fiscal year total minus Q1–Q3. Where a figure was later restated, the first-reported value is used.
+- **Press releases:** each quarter links to its earnings press release (exhibit 99.1 of the 8-K), plus CFO commentary or slides (99.2) when the company files them. Click a bar, or use the quarter table under the chart. The first report run fetches about 40 filing pages per stock, roughly 10 minutes for 90 stocks. The links are cached permanently in `data/sec/exhibits/`, so later runs are fast.
+- **Gaps:** foreign filers (20-F) and companies without XBRL have no data. Use `--no-fundamentals` to skip this panel.
+- **User-Agent:** the SEC asks for a descriptive User-Agent. You can set one with `MOONSHOT_SEC_USER_AGENT="yourname you@example.com"`.
+
+## Rating fundamentals with an LLM (blind to price)
+`moonshot rate` sends each stock's SEC filings to an NVIDIA Nemotron model and asks it for a
+**fundamental trajectory score from -100 to 100**: 0 is a neutral starting point, +100 is a genuine
+business moonshot (a real breakout in the numbers, not the stock), and -100 is filings that point to
+real bankruptcy risk.
+```bash
+export NEMOTRON_API_KEY=nvapi-...            # or put NEMOTRON_API_KEY=... in a local .env file (already done in this repo)
+moonshot rate                                # scores the top 100 of the latest scan CSV by multiple
+moonshot rate results/multibaggers_full.csv --top 50
+moonshot rate --status                       # progress only, no API calls, no key needed
+moonshot rate                                # re-running resumes: done tickers are skipped
+moonshot rate --retry-failed                 # give failed tickers another attempt run
+```
+
+**Blind to price, on purpose.** The model is only ever shown: the ticker, company name, sector, its
+quarterly revenue/EPS/net-income history from SEC EDGAR, and the text of its recent earnings press
+releases. It never sees the price, the multiple, the run dates, or market cap (market cap is price
+times shares, so it's excluded too). The system prompt also tells the model that it may already know
+this company's stock history — including if it's a famous "meme stock" — and to ignore that
+completely and score only the filed numbers and text. See the prompt in
+[scoring.py](src/moonshot/scoring.py).
+
+**Checkpointed and resumable.** Every ticker's result is written to
+`data/scores/<csv-stem>.json` immediately after it's scored, so a crash, a rate limit, or Ctrl-C
+loses at most the one ticker in progress. Simply running `moonshot rate` again resumes: it skips
+every ticker already marked done and retries failed ones, up to `--max-attempts` (default 5) tries
+across runs. `moonshot rate --status` reports progress (done/failed/pending, plus each failure's
+error) without making any API calls or needing a key — this is the command to check status from chat.
+`--restart` wipes the checkpoint and starts over; `--retry-failed` resets failed tickers to pending
+first.
+
+Scored results are written to `results/<csv-stem>_scores.csv` (ticker, score, rationale, model,
+timestamp), sorted by score. **Model:** defaults to `nvidia/nemotron-3-super-120b-a12b`, confirmed working against your key (list your
+account's available models at any time with `GET https://integrate.api.nvidia.com/v1/models`). It's a
+reasoning model - it thinks before answering, which is why `call_nemotron` in
+[scoring.py](src/moonshot/scoring.py) requests up to 3000 tokens per call even though the answer
+itself is short. Pass `--model` to use a different one from your account's catalog.
+
+### Viewing scores in the report
+Once `moonshot rate` has written `results/<csv-stem>_scores.csv`, `moonshot report` picks it up
+automatically (or pass `--scores path/to.csv`) and adds:
+- A **"Fundamentals score" badge** above the price chart for the selected stock (colored green/red,
+  with a qualitative label - Moonshot signal / Improving / Neutral / Weakening / Distress risk) and
+  its rationale below, so you can compare the price story and the fundamentals story side by side.
+- A **sortable "Fund. score" column** in the table (hover a value for the full rationale).
+
 ## How a run is detected
 For every day that could start a run, the scanner finds the highest price over the next `--window` trading days. It divides that high by the start price and keeps the ticker if the best ratio is at least `--multiple`.
 - Prices are adjusted for splits and dividends (`Adj Close`), so reported multiples are total return.
