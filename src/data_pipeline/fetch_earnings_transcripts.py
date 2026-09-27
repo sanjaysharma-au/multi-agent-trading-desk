@@ -18,7 +18,6 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-QUARTER_LINK_RE = re.compile(r'href="(/stocks/{ticker}/transcripts/\d+-q([1-4])-(\d{{4}})/)"')
 BLOCK_SPLIT_RE = re.compile(r'<div class="border-t border-sharp pt-5')
 SPEAKER_RE = re.compile(r'<div class="text-lg font-bold[^"]*">(.*?)</div>', re.DOTALL)
 TITLE_RE = re.compile(r'<div class="text-sm italic text-muted">(.*?)</div>', re.DOTALL)
@@ -49,12 +48,29 @@ def _clean(fragment: str) -> str:
 
 
 def list_quarters(session: requests.Session, ticker: str) -> dict[str, str]:
-    page = _get(session, f"{BASE_URL}/stocks/{ticker.lower()}/transcripts/")
-    pattern = re.compile(QUARTER_LINK_RE.pattern.format(ticker=re.escape(ticker.lower())))
-    quarters = {}
-    for path, quarter, year in pattern.findall(page):
-        quarters[f"{year}Q{quarter}"] = path
-    return quarters
+    lower = ticker.lower()
+    candidates = [f"/stocks/{lower}/transcripts/"]
+    index_link = re.compile(r'href="(?:https://stockanalysis\.com)?(/(?:stocks|quote/[a-z]+)/([A-Za-z.\-]+)/transcripts/)"')
+    seen: set[str] = set()
+    while candidates:
+        index_path = candidates.pop(0)
+        if index_path in seen:
+            continue
+        seen.add(index_path)
+        try:
+            page = _get(session, BASE_URL + index_path)
+        except RuntimeError:
+            continue
+        quarters = {}
+        link = re.compile(rf'href="({re.escape(index_path)}\d+-q([1-4])-(\d{{4}})/)"', re.I)
+        for path, quarter, year in link.findall(page):
+            quarters[f"{year}Q{quarter}"] = path
+        if quarters:
+            return quarters
+        for path, symbol in index_link.findall(page):
+            if symbol.lower().startswith(lower) and path not in seen:
+                candidates.append(path)
+    return {}
 
 
 def parse_transcript(page: str) -> str:

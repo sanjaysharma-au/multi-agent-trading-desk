@@ -98,6 +98,8 @@ def build_steps(ticker: str, variants: list[str], args: argparse.Namespace) -> l
     fetch_cmd = [py, str(SCRIPTS.parent / "data_pipeline" / "fetch_earnings_transcripts.py"), ticker]
     steps.append(Step("fetch", fetch_cmd, raw_missing))
     press_cmd = [py, str(SCRIPTS.parent / "data_pipeline" / "fetch_press_releases.py"), ticker]
+    if args.cik:
+        press_cmd += ["--cik", str(args.cik)]
     steps.append(Step("press", press_cmd, lambda: _press_missing(ticker)))
 
     for variant in variants:
@@ -209,6 +211,8 @@ def main():
     parser.add_argument("--score-model", default=None)
     parser.add_argument("--max-retries", type=int, default=2, help="extra passes over a step that finishes incomplete")
     parser.add_argument("--retry-delay", type=float, default=60.0)
+    parser.add_argument("--cik", type=int, default=None,
+                        help="SEC CIK, for tickers the SEC's ticker list does not have (for example delisted companies)")
     parser.add_argument("--refetch", action="store_true", help="fetch transcripts even if some are on disk")
     parser.add_argument("--status", action="store_true", help="show what is done and outstanding, then exit")
     parser.add_argument("--allow-chain-break", action="store_true",

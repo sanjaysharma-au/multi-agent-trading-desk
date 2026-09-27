@@ -51,7 +51,7 @@ SHRINK_PRIOR_WEIGHT = 6
 QUOTE_SHINGLE = 5
 QUOTE_MATCH_FRACTION = 0.6
 
-ANCHOR_RULES_VERSION = "momentum-v2"
+ANCHOR_RULES_VERSION = "momentum-v2-gaapop"
 LEDGER_FILE = "ledger.json"
 PRESS_LEDGER_FILE = "press_ledger.json"
 PRESS_SLOTS = [
@@ -358,9 +358,12 @@ def compute_anchors(ledger: dict, prior: dict | None, chain: dict) -> dict:
         repeatable.append(f"backlog {backlog:g} >= annualized revenue {annual_revenue:g}")
     repeatable_base = bool(revenue and revenue_growing and repeatable)
 
+    gaap_operating, gaap_net = _value(ledger, "gaap_operating_income"), _value(ledger, "gaap_net_income")
     positive = [s for s in ["adjusted_operating_income", "operating_cash_flow", "free_cash_flow",
                             "gaap_operating_income", "gaap_net_income"] if (_value(ledger, s) or 0) > 0]
-    gaap_profitable = any(s.startswith("gaap_") for s in positive)
+    if gaap_operating is not None and gaap_operating <= 0 and "gaap_net_income" in positive:
+        positive.remove("gaap_net_income")
+    gaap_profitable = gaap_operating > 0 if gaap_operating is not None else (gaap_net or 0) > 0
     fcf_positive = (_value(ledger, "free_cash_flow") or 0) > 0
 
     if cur_growth and prior_growth and cur_growth["period"] == prior_growth["period"]:
