@@ -13,7 +13,8 @@ import pandas as pd
 
 from .enrich import enrich
 from .fundamentals import cik_map, load_cashflow, load_fundamentals
-from .inflection import find_crossing, merge_financials
+from .inflection import find_crossing, find_failure, merge_financials
+from .report_inflections import build_inflections_report
 from .multibagger import find_best_run, parse_period
 from .prices import iter_prices
 from .report import build_report, latest_csv
@@ -87,11 +88,26 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="quarters since the crossing required to call it durable (default 2)")
     inflect.add_argument("--max-wobble-quarters", type=int, default=1,
                          help="quarters after the crossing allowed to dip to GAAP-profit-only (default 1)")
+    inflect.add_argument("--mode", choices=["crossing", "failure", "both"], default="crossing",
+                         help="crossing = Palantir-shaped success, failure = Canoo-shaped, both (default crossing)")
+    inflect.add_argument("--failure-min-quarters", type=int, default=8,
+                         help="quarters of history required before calling a failure (default 8)")
+    inflect.add_argument("--failure-max-revenue-to-burn", type=float, default=0.1,
+                         help="cumulative revenue / cumulative losses must stay below this (default 0.1)")
     inflect.add_argument("--max-age", type=float, default=1, help="universe cache max age in days (default 1)")
     inflect.add_argument("--sec-max-age", type=float, default=7, help="SEC data cache max age in days (default 7)")
     inflect.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
     inflect.add_argument("--out", type=Path, help="output CSV (default results/inflections_<date>.csv)")
     inflect.add_argument("--top", type=int, default=25, help="rows to print (default 25)")
+
+    ireport = sub.add_parser("inflect-report", help="build an interactive HTML report from `moonshot inflect` output")
+    ireport.add_argument("--crossings", type=Path, help="crossings CSV (default: latest results/inflections_*.csv, excluding _failures)")
+    ireport.add_argument("--failures", type=Path, help="failures CSV (default: latest results/inflections_*_failures.csv)")
+    ireport.add_argument("--crossings-scores", type=Path, help="`moonshot rate` output CSV for the crossings")
+    ireport.add_argument("--failures-scores", type=Path, help="`moonshot rate` output CSV for the failures")
+    ireport.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
+    ireport.add_argument("--out", type=Path, default=Path("results/inflections_report.html"), help="output HTML")
+    ireport.add_argument("--no-open", action="store_true", help="don't open the report in a browser")
     return parser
 
 
@@ -223,42 +239,89 @@ def inflect(args: argparse.Namespace) -> int:
         universe = universe.head(args.limit)
     meta = universe.set_index("ticker")
     tickers = universe["ticker"].tolist()
-    print(f"Checking {len(tickers)} tickers for a sustained profit + free-cash-flow crossing "
+    do_crossing, do_failure = args.mode in ("crossing", "both"), args.mode in ("failure", "both")
+    what = {"crossing": "a Palantir-shaped crossing", "failure": "a Canoo-shaped failure",
+           "both": "a Palantir-shaped crossing and a Canoo-shaped failure"}[args.mode]
+    print(f"Checking {len(tickers)} tickers for {what} "
           f"(needs SEC XBRL data; foreign filers and companies without it are skipped)", file=sys.stderr)
 
     sec_dir = args.data_dir / "sec"
     ciks = cik_map(sec_dir, args.sec_max_age)
-    rows = []
+    crossings, failures = [], []
     for n, ticker in enumerate(tickers, start=1):
         if n % 250 == 0:
-            print(f"  ...{n}/{len(tickers)} checked, {len(rows)} hits", file=sys.stderr)
+            print(f"  ...{n}/{len(tickers)} checked, {len(crossings)} crossings, {len(failures)} failures",
+                  file=sys.stderr)
         try:
             fnd = load_fundamentals(ticker, sec_dir, args.sec_max_age, ciks)
             if fnd is None or fnd.empty:
                 continue
             cf = load_cashflow(ticker, sec_dir, args.sec_max_age, ciks)
             merged = merge_financials(fnd, cf)
-            hit = find_crossing(merged, args.min_pre_quarters, args.min_post_quarters,
-                                args.max_wobble_quarters, args.min_pre_unprofitable_frac)
-            if hit:
-                rows.append({"ticker": ticker, "name": meta.at[ticker, "name"], **hit})
+            if do_crossing:
+                hit = find_crossing(merged, args.min_pre_quarters, args.min_post_quarters,
+                                    args.max_wobble_quarters, args.min_pre_unprofitable_frac)
+                if hit:
+                    crossings.append({"ticker": ticker, "name": meta.at[ticker, "name"], **hit})
+            if do_failure:
+                hit = find_failure(merged, args.failure_min_quarters, args.failure_max_revenue_to_burn)
+                if hit:
+                    failures.append({"ticker": ticker, "name": meta.at[ticker, "name"], **hit})
         except Exception as exc:
             logging.getLogger(__name__).warning("inflection check failed for %s: %s", ticker, exc)
 
-    if not rows:
-        print("No inflections found.", file=sys.stderr)
-        return 0
+    stem = f"inflections_{dt.date.today():%Y%m%d}"
+    if do_crossing:
+        _write_inflection_csv(crossings, "quarters_since_crossing", args.out or Path("results") / f"{stem}.csv",
+                              ["ticker", "crossing_period_end", "quarters_since_crossing",
+                               "quarters_of_prior_history", "wobble_quarters", "latest_revenue",
+                               "latest_net_income", "latest_free_cash_flow"],
+                              "crossings (sustained profit + FCF)", args.top)
+    if do_failure:
+        # In --mode both, crossings and failures have different schemas and can't share one file,
+        # so --out (if given) applies only when failure is the sole mode being run.
+        failure_out = args.out if args.mode == "failure" and args.out else Path("results") / f"{stem}_failures.csv"
+        _write_inflection_csv(failures, "revenue_to_burn_ratio", failure_out,
+                              ["ticker", "quarters_of_history", "quarters_with_revenue",
+                               "cumulative_revenue", "cumulative_losses", "revenue_to_burn_ratio",
+                               "latest_net_income", "latest_free_cash_flow"],
+                              "failures (never proved the model)", args.top)
+    return 0
 
-    result = pd.DataFrame(rows).sort_values("quarters_since_crossing").reset_index(drop=True)
-    out = args.out or Path("results") / f"inflections_{dt.date.today():%Y%m%d}.csv"
+
+def _write_inflection_csv(rows: list[dict], sort_key: str, out: Path, cols: list[str], label: str, top: int) -> None:
+    if not rows:
+        print(f"No {label} found.", file=sys.stderr)
+        return
+    result = pd.DataFrame(rows).sort_values(sort_key).reset_index(drop=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(out, index=False)
-
-    cols = ["ticker", "crossing_period_end", "quarters_since_crossing", "quarters_of_prior_history",
-            "wobble_quarters", "latest_revenue", "latest_net_income", "latest_free_cash_flow"]
     with pd.option_context("display.width", 200, "display.max_columns", None):
-        print(result[cols].head(args.top).to_string(index=False))
-    print(f"\n{len(result)} inflections written to {out}", file=sys.stderr)
+        print(f"\n{label}:")
+        print(result[cols].head(top).to_string(index=False))
+    print(f"{len(result)} {label} written to {out}", file=sys.stderr)
+
+
+def _latest_inflections_csv(want_failures: bool) -> Path | None:
+    files = sorted(Path("results").glob("inflections_*.csv"), key=lambda p: p.stat().st_mtime)
+    files = [f for f in files if ("_failures" in f.stem) == want_failures]
+    return files[-1] if files else None
+
+
+def inflect_report(args: argparse.Namespace) -> int:
+    crossings = args.crossings or _latest_inflections_csv(want_failures=False)
+    failures = args.failures or _latest_inflections_csv(want_failures=True)
+    if not crossings and not failures:
+        print("No inflections CSV found; run `moonshot inflect` first, or pass --crossings/--failures.",
+              file=sys.stderr)
+        return 1
+    print(f"Using crossings: {crossings or '(none)'}", file=sys.stderr)
+    print(f"Using failures: {failures or '(none)'}", file=sys.stderr)
+    path = build_inflections_report(crossings, failures, args.data_dir, args.out,
+                                    args.crossings_scores, args.failures_scores)
+    print(f"Report written to {path}", file=sys.stderr)
+    if not args.no_open:
+        webbrowser.open(path.resolve().as_uri())
     return 0
 
 
@@ -273,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         return rate(args)
     if args.command == "inflect":
         return inflect(args)
+    if args.command == "inflect-report":
+        return inflect_report(args)
     return 1
 
 

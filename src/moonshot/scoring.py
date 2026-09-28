@@ -49,12 +49,23 @@ revenue, deep and worsening losses, insolvency or liquidity warnings).
 
 Rules:
 - Base the score ONLY on the filings data given below: the reported numbers and the press-release \
-text. Do not use any other information about the company.
+text. Do not use any other information about the company - including anything you may know about \
+what happened to it after the period this data covers. Judge it exactly as an analyst reading these \
+filings in real time would have, with no hindsight.
 - You may already know this company and how its stock performed - including if it is a well-known \
 "meme stock" or had a famous rally or crash. Ignore all of that completely. Do not mention, infer, \
 or let your score be influenced by the stock price, trading volume, short interest, or market \
 narrative in any way. If you are not confident you can separate the two, base the score strictly \
 on the numbers and text provided and say so in the rationale.
+- Shrinking losses are not automatically good news. A company burning through its cash can shrink \
+its losses simply by slashing spending to survive, right up until it fails - that looks identical, \
+quarter to quarter, to a business genuinely improving its unit economics. To tell them apart, weigh \
+the "Lifetime totals" line given below: cumulative revenue as a fraction of cumulative losses. A \
+long history with that fraction still near zero (revenue has never offset a meaningful share of what \
+the company has burned) is a real warning sign even in a quarter where the loss narrowed - narrower \
+losses funded by cost-cutting, with revenue still going nowhere, is not the same as a business model \
+starting to work. A rising fraction, revenue growing faster than losses, or a genuine turn to \
+positive cash flow are what real improvement looks like.
 - Weigh the most recent quarters most heavily, but note the trend across the whole history given.
 - Respond with ONLY a single JSON object, no other text: \
 {"score": <integer from -100 to 100>, "rationale": "<2-4 sentences citing specific quarters>"}"""
@@ -124,6 +135,21 @@ def format_fundamentals_table(f: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def format_lifetime_totals(f: pd.DataFrame) -> str:
+    """Cumulative revenue vs. cumulative losses over all quarters shown - a summary of the exact
+    same historical numbers above, computed with no outside information. See the system prompt for
+    why this line matters: it is what separates a real turnaround from a company's losses merely
+    shrinking because it is cutting spending to survive.
+    """
+    total_revenue = f["revenue"].fillna(0).clip(lower=0).sum()
+    total_losses = -f["net_income"].fillna(0).clip(upper=0).sum()
+    if total_losses <= 0:
+        return "Lifetime totals: no cumulative net losses over this history."
+    ratio_pct = total_revenue / total_losses * 100
+    return (f"Lifetime totals over {len(f)} quarters: cumulative revenue {_fmt_money(total_revenue)} vs. "
+           f"cumulative losses {_fmt_money(total_losses)} ({ratio_pct:.1f}% of losses offset by revenue).")
+
+
 def recent_release_texts(f: pd.DataFrame, sec_dir: Path, n: int) -> list[str]:
     """Text of the last `n` earnings press releases available (most recent last)."""
     texts = []
@@ -141,11 +167,12 @@ def recent_release_texts(f: pd.DataFrame, sec_dir: Path, n: int) -> list[str]:
 
 
 def build_user_prompt(ticker: str, name: str | None, sector: str | None, industry: str | None,
-                      table_text: str, releases: list[tuple]) -> str:
+                      f: pd.DataFrame, releases: list[tuple]) -> str:
     parts = [f"Ticker: {ticker}", f"Company: {name or 'unknown'}"]
     if sector:
         parts.append(f"Sector / industry: {sector} / {industry or 'unknown'}")
-    parts.append("\nQuarterly fundamentals from SEC filings (most recent last):\n" + table_text)
+    parts.append("\nQuarterly fundamentals from SEC filings (most recent last):\n" + format_fundamentals_table(f))
+    parts.append("\n" + format_lifetime_totals(f))
     for period_end, text in releases:
         parts.append(f"\n--- Earnings press release for quarter ended {period_end} ---\n{text}")
     return "\n".join(parts)
@@ -298,9 +325,8 @@ def score_ticker(ticker: str, name: str | None, sector: str | None, industry: st
     f = load_fundamentals(ticker, sec_dir, ciks=ciks)
     if f is None or f.empty:
         raise ValueError("no SEC fundamentals available for this ticker")
-    table_text = format_fundamentals_table(f)
     releases = recent_release_texts(f, sec_dir, releases_n)
-    prompt = build_user_prompt(ticker, name, sector, industry, table_text, releases)
+    prompt = build_user_prompt(ticker, name, sector, industry, f, releases)
     return call_nemotron(prompt, api_key, model, max_retries=api_retries)
 
 

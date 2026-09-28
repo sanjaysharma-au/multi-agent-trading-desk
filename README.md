@@ -62,6 +62,19 @@ this company's stock history — including if it's a famous "meme stock" — and
 completely and score only the filed numbers and text. See the prompt in
 [scoring.py](src/moonshot/scoring.py).
 
+**Blind to the outcome, too.** The model is told to judge a company exactly as an analyst reading
+these filings in real time would have — no hindsight about what happened to it afterward (e.g. a
+bankruptcy filing is never shown; only earnings-related 8-Ks are). This matters for distressed
+companies specifically: a company that's genuinely dying can shrink its losses quarter to quarter
+just by slashing spending, which looks identical on paper to a business improving its unit
+economics. Real cases hit exactly this trap: Canoo (GOEV) and Lordstown Motors (RIDE), both of which
+later went bankrupt, initially scored +60/+35 ("clear turnaround") when the model saw only the raw
+quarterly numbers. The fix is a `Lifetime totals` line in every prompt — cumulative revenue as a
+percentage of cumulative losses, computed from the same historical data already shown, no outside
+information — plus an explicit rule telling the model to weigh it. After that, the same two
+companies (using the same pre-outcome data) scored -20/-40, correctly citing the near-zero ratio as
+the reason. See `format_lifetime_totals` in [scoring.py](src/moonshot/scoring.py).
+
 **Checkpointed and resumable.** Every ticker's result is written to
 `data/scores/<csv-stem>.json` immediately after it's scored, so a crash, a rate limit, or Ctrl-C
 loses at most the one ticker in progress. Simply running `moonshot rate` again resumes: it skips

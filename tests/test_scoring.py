@@ -3,7 +3,15 @@ import json
 import pandas as pd
 import pytest
 
-from moonshot.scoring import Checkpoint, format_fundamentals_table, html_to_text, parse_score, status_lines
+from moonshot.scoring import (
+    Checkpoint,
+    build_user_prompt,
+    format_fundamentals_table,
+    format_lifetime_totals,
+    html_to_text,
+    parse_score,
+    status_lines,
+)
 
 
 def test_parse_score_plain_json():
@@ -90,3 +98,31 @@ def test_status_lines_counts():
     lines = status_lines([("AAA", None, None, None), ("BBB", None, None, None), ("CCC", None, None, None)], cp)
     assert lines[0] == "1/3 scored, 1 failed, 1 pending"
     assert any("BBB" in l and "boom" in l for l in lines[1:])
+
+
+def test_lifetime_totals_flags_a_near_zero_revenue_to_burn_ratio():
+    df = pd.DataFrame({"revenue": [0, 0, 1], "net_income": [-1000, -1000, -1000]})
+    line = format_lifetime_totals(df)
+    assert "0.0%" in line or "0.1%" in line  # ~0.03% offset, rounds to 0.0
+    assert "cumulative losses" in line
+
+
+def test_lifetime_totals_handles_no_losses():
+    df = pd.DataFrame({"revenue": [100, 100], "net_income": [10, 10]})
+    assert "no cumulative net losses" in format_lifetime_totals(df)
+
+
+def test_build_user_prompt_includes_lifetime_totals_and_no_price_fields():
+    df = pd.DataFrame({
+        "period_end": pd.to_datetime(["2023-03-31", "2023-06-30"]),
+        "announced": pd.to_datetime(["2023-05-01", "2023-08-01"]),
+        "revenue": [0.0, 0.0],
+        "revenue_yoy_pct": [None, None],
+        "eps": [None, None],
+        "net_income": [-1_000_000.0, -1_000_000.0],
+    })
+    prompt = build_user_prompt("XYZ", "Example Co", None, None, df, [])
+    assert "Lifetime totals" in prompt
+    assert "cumulative losses" in prompt
+    for forbidden in ("price", "multiple", "start_date", "peak_date"):
+        assert forbidden not in prompt.lower()
