@@ -164,8 +164,9 @@ def _call_claude(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL
             )
             if result.returncode == 0:
                 return result.stdout.strip()
+            detail = result.stderr.strip() or result.stdout.strip() or "no output"
             last_error = RuntimeError(
-                f"claude CLI failed (exit {result.returncode}): {result.stderr.strip()}"
+                f"claude CLI failed (exit {result.returncode}): {detail}"
             )
         except subprocess.TimeoutExpired as e:
             last_error = e

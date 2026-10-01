@@ -207,7 +207,7 @@ def main():
     parser.add_argument("--model", default=None, help="analysis model")
     parser.add_argument("--ledger-backend", choices=["nemotron", "claude"], default="nemotron")
     parser.add_argument("--ledger-model", default=None)
-    parser.add_argument("--score-backend", choices=["nemotron", "claude"], default="claude")
+    parser.add_argument("--score-backend", choices=["nemotron", "claude"], default="nemotron")
     parser.add_argument("--score-model", default=None)
     parser.add_argument("--max-retries", type=int, default=2, help="extra passes over a step that finishes incomplete")
     parser.add_argument("--retry-delay", type=float, default=60.0)
