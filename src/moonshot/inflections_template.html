@@ -447,6 +447,7 @@ document.querySelectorAll("#fund-metric button").forEach(btn => btn.addEventList
 const COLS = {
   crossings: [
     ["ticker", "Ticker", "str"], ["name", "Name", "str"],
+    ["crossover_date", "Crossover Date", "str", v => v == null ? "–" : fmtDate(v)],
     ["crossing_period_end", "Crossed", "str"], ["quarters_since_crossing", "Qtrs since", "num", v => v],
     ["quarters_of_prior_history", "Prior history", "num", v => v], ["wobble_quarters", "Wobbles", "num", v => v],
     ["latest_revenue", "Latest revenue", "num", fmtMoney], ["latest_net_income", "Latest net income", "num", fmtMoney],
