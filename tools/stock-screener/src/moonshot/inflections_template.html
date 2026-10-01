@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inflections Report</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --select: #eb6834;
+  --band: rgba(42,120,214,0.10);
+  --up: #006300;
+  --down: #d03b3b;
+  --up-bg: rgba(0,99,0,0.08);
+  --down-bg: rgba(208,59,59,0.08);
+  --hover: rgba(11,11,11,0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --select: #d95926; --band: rgba(57,135,229,0.16);
+    --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --select: #d95926; --band: rgba(57,135,229,0.16);
+  --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 2px; }
+.sub { color: var(--ink-2); margin: 0 0 20px; }
+.note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.tile { padding: 14px 16px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.card { padding: 14px 16px; min-width: 0; margin-bottom: 16px; }
+.plot { position: relative; }
+.plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.plot text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.plot .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.plot .lbl { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; fill: var(--ink-2); font-size: 11px; font-weight: 600; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); white-space: nowrap; display: none; z-index: 2; }
+.tip strong { font-variant-numeric: tabular-nums; }
+.tip .k { color: var(--ink-2); }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.toolbar input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); min-width: 220px; }
+.toolbar .count { color: var(--muted); font-size: 12px; }
+.toolbar button.export { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink-2); cursor: pointer; margin-left: auto; }
+.toolbar button.export:hover { background: var(--hover); color: var(--ink); }
+.tablewrap { overflow: auto; max-height: 420px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; cursor: pointer; user-select: none; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--hover); }
+tbody tr.sel { box-shadow: inset 3px 0 0 var(--select); background: var(--hover); }
+td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.up { color: var(--up); } .down { color: var(--down); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; margin: 4px 0 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.legend i.band { border-radius: 2px; background: var(--band); border: 1px solid var(--series-1); }
+.seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--axis); }
+.seg button[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.detail-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px 12px; flex-wrap: wrap; }
+.score-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+.score-badge.up { color: var(--up); background: var(--up-bg); }
+.score-badge.down { color: var(--down); background: var(--down-bg); }
+.score-rationale { font-style: italic; }
+.fund-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
+.fund-head h3 { font-size: 13px; margin: 0; }
+.qwrap { overflow: auto; max-height: 260px; margin-top: 10px; border-top: 1px solid var(--grid); }
+.qwrap table { font-size: 12px; }
+.qwrap th { cursor: default; }
+.qwrap tbody tr { cursor: default; }
+.qwrap tr.inrun td { background: var(--band); }
+.qwrap a { color: var(--series-1); text-decoration: none; margin-right: 10px; }
+.qwrap a:hover { text-decoration: underline; }
+.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.tabs button { font: inherit; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--series-1); background: var(--band); }
+.tabs .n { color: var(--muted); font-weight: 400; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Inflections Report</h1>
+  <p class="sub" id="sub"></p>
+  <section class="tiles" id="tiles"></section>
+
+  <div class="card">
+    <div class="detail-head">
+      <h2 id="detail-title">Price history</h2>
+      <div class="score-badge" id="score-badge" hidden></div>
+    </div>
+    <p class="note score-rationale" id="score-rationale" hidden></p>
+    <p class="note" id="detail-note">Adjusted close, weekly, log scale. Ticks on the baseline mark earnings announcements.</p>
+    <div class="legend" id="detail-legend"><span><i style="background:var(--series-1)"></i>Adjusted close</span></div>
+    <div class="plot" id="detail"></div>
+    <div id="fund-wrap">
+      <div class="fund-head">
+        <h3>Quarterly results, plotted on announcement date</h3>
+        <div class="seg" id="fund-metric" role="group" aria-label="Fundamental metric">
+          <button data-k="revenue" aria-pressed="true">Revenue</button><button data-k="revenue_yoy_pct" aria-pressed="false">Revenue YoY</button><button data-k="eps" aria-pressed="false">EPS</button><button data-k="net_income" aria-pressed="false">Net income</button>
+        </div>
+      </div>
+      <p class="note" id="fund-note">Each bar is one quarter, placed on the day results were announced (the 8-K earnings release), not the day the quarter ended. Source: SEC EDGAR.</p>
+      <div class="plot" id="fund"></div>
+      <p class="note">Click a bar to open that quarter's press release. * = no 8-K found, so the 10-Q/10-K filing date is used.</p>
+      <div class="qwrap"><table id="qtable"><thead><tr>
+        <th>Quarter ended</th><th>Announced</th><th class="num">Revenue</th><th class="num">YoY</th><th class="num">EPS</th><th class="num">Net income</th><th>Documents</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button data-t="crossings" aria-pressed="true">Crossings <span class="n" id="n-crossings"></span></button>
+    <button data-t="failures" aria-pressed="false">Failures <span class="n" id="n-failures"></span></button>
+  </div>
+  <section class="card">
+    <p class="note" id="table-note"></p>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Filter by ticker or name…" aria-label="Filter table">
+      <span class="count" id="count"></span>
+      <button class="export" id="export-csv" type="button">Export CSV</button>
+    </div>
+    <div class="tablewrap"><table id="table"><thead></thead><tbody></tbody></table></div>
+  </section>
+</main>
+<script>
+const DATA = /*DATA*/null;
+const LISTS = { crossings: DATA.crossings || [], failures: DATA.failures || [] };
+const series = DATA.series || {}, FUND = DATA.fundamentals || {};
+const DAY = 86400000;
+const NS = "http://www.w3.org/2000/svg";
+let activeTab = "crossings";
+let selected = LISTS.crossings.length ? LISTS.crossings[0].ticker : (LISTS.failures[0]?.ticker ?? null);
+let filterText = "";
+let fundMetric = "revenue";
+let detailScale = null;
+
+// ---------- formatting ----------
+const fmtX = v => v == null ? "–" : (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + "×";
+const fmtPrice = v => v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toPrecision(3));
+const fmtMoney = v => { if (v == null) return "–"; if (v === 0) return "$0"; const a = Math.abs(v), sg = v < 0 ? "-" : "";
+  return sg + (a >= 1e9 ? "$" + (a / 1e9).toFixed(a >= 1e10 ? 1 : 2) + "B" : a >= 1e6 ? "$" + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M" : "$" + (a / 1e3).toFixed(0) + "K"); };
+const fmtEps = v => v == null ? "–" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+const fmtPct = v => v == null ? "–" : (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+const fmtRatio = v => v == null ? "–" : (v * 100).toFixed(v < 0.001 ? 3 : 1) + "%";
+const fmtDate = ms => new Date(ms).toISOString().slice(0, 10);
+const median = a => { const s = a.filter(v => v != null).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+const METRICS = {
+  revenue: ["Revenue", fmtMoney], revenue_yoy_pct: ["Revenue YoY", fmtPct],
+  eps: ["Diluted EPS", fmtEps], net_income: ["Net income", fmtMoney],
+};
+const scoreBand = v => v == null ? null : v > 50 ? "Moonshot signal" : v > 0 ? "Improving" : v === 0 ? "Neutral"
+  : v >= -50 ? "Weakening" : "Distress risk";
+
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function txt(parent, x, y, s, attrs = {}) { const t = el("text", { x, y, ...attrs }, parent); t.textContent = s; return t; }
+function logScale(d0, d1, r0, r1) { const a = Math.log(d0), b = Math.log(d1); return v => r0 + (Math.log(v) - a) / (b - a) * (r1 - r0); }
+function linScale(d0, d1, r0, r1) { return v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0); }
+function logTicks(lo, hi) {
+  const out = [];
+  for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++)
+    for (const m of [1, 2, 5]) { const v = m * 10 ** e; if (v >= lo && v <= hi) out.push(v); }
+  return out.length > 7 ? out.filter(v => /^1/.test(String(v)) || v === out[0]) : out;
+}
+function niceTicks(lo, hi, n = 4) {
+  const span = hi - lo || 1, raw = span / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(k => k * mag).find(k => span / k <= n) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+function yearTicks(svg, X, t0, t1, W, m, yPos) {
+  const yrA = new Date(t0).getUTCFullYear(), yrB = new Date(t1).getUTCFullYear();
+  const step = Math.max(1, Math.ceil((yrB - yrA + 1) / Math.max(2, Math.floor((W - m.l - m.r) / 70))));
+  for (let y = yrA + 1; y <= yrB; y += step) txt(svg, X(Date.UTC(y, 0, 1)), yPos, String(y), { "text-anchor": "middle" });
+}
+function tipShow(tip, plot, x, y, lines) {
+  tip.replaceChildren();
+  lines.forEach(([k, v], i) => {
+    const div = document.createElement("div");
+    if (i === 0) { const s = document.createElement("strong"); s.textContent = k; div.appendChild(s); }
+    else { const s = document.createElement("strong"); s.textContent = v; const l = document.createElement("span"); l.className = "k"; l.textContent = " " + k; div.append(s, l); }
+    tip.appendChild(div);
+  });
+  tip.style.display = "block";
+  const w = plot.clientWidth, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, x + 12), w - tw) + "px";
+  tip.style.top = Math.max(0, y - tip.offsetHeight - 10) + "px";
+}
+function findRow(ticker) {
+  return LISTS.crossings.find(r => r.ticker === ticker) || LISTS.failures.find(r => r.ticker === ticker);
+}
+function rowKind(ticker) {
+  return LISTS.crossings.some(r => r.ticker === ticker) ? "crossing" : "failure";
+}
+
+// ---------- header ----------
+function renderHeader() {
+  const c = LISTS.crossings.length, f = LISTS.failures.length;
+  document.getElementById("sub").textContent =
+    `${c} fundamentals crossings (Palantir-shaped) and ${f} failures (Canoo-shaped) found in SEC filings · generated ${DATA.generated}`;
+  const scoredC = LISTS.crossings.filter(r => r.nemotron_score != null);
+  const scoredF = LISTS.failures.filter(r => r.nemotron_score != null);
+  const tiles = [
+    ["Crossings found", String(c)],
+    ["Failures found", String(f)],
+    ["Median crossing score", fmtX0(median(scoredC.map(r => r.nemotron_score)))],
+    ["Median failure score", fmtX0(median(scoredF.map(r => r.nemotron_score)))],
+  ];
+  function fmtX0(v) { return v == null ? "–" : (v > 0 ? "+" : "") + v; }
+  const box = document.getElementById("tiles");
+  for (const [label, value] of tiles) {
+    const t = document.createElement("div"); t.className = "tile";
+    const l = document.createElement("div"); l.className = "label"; l.textContent = label;
+    const v = document.createElement("div"); v.className = "value"; v.textContent = value;
+    t.append(l, v); box.appendChild(t);
+  }
+  document.getElementById("n-crossings").textContent = `(${c})`;
+  document.getElementById("n-failures").textContent = `(${f})`;
+}
+
+// ---------- score badge (shared) ----------
+function renderScoreBadge(r) {
+  const badge = document.getElementById("score-badge"), note = document.getElementById("score-rationale");
+  const v = r ? r.nemotron_score : null;
+  if (v == null || Number.isNaN(v)) { badge.hidden = true; note.hidden = true; return; }
+  badge.hidden = false;
+  badge.className = "score-badge" + (v > 0 ? " up" : v < 0 ? " down" : "");
+  badge.textContent = `Fundamentals score ${v > 0 ? "+" : ""}${v} · ${scoreBand(v)}`;
+  if (r.nemotron_rationale) { note.hidden = false; note.textContent = "Nemotron, blind to price and outcome: " + r.nemotron_rationale; }
+  else note.hidden = true;
+}
+
+// ---------- price + fundamentals detail (shared across both tabs) ----------
+function renderDetail() {
+  const plot = document.getElementById("detail");
+  plot.replaceChildren();
+  const r = selected ? findRow(selected) : null;
+  const title = document.getElementById("detail-title");
+  const legend = document.getElementById("detail-legend");
+  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); renderFund(null); renderQuarterTable(null); return; }
+  const kind = rowKind(r.ticker);
+  title.textContent = `${r.ticker}${r.name ? " · " + r.name : ""}`;
+  renderScoreBadge(r);
+  const s = series[r.ticker];
+  const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
+  legend.innerHTML = '<span><i style="background:var(--series-1)"></i>Adjusted close</span>' +
+    (kind === "crossing" ? '<span><i style="background:var(--select)"></i>Crossing quarter</span>' : "");
+  if (!s || !s.d.length) {
+    detailScale = { ts: null, tp: null };
+    renderFund(r); renderQuarterTable(r);
+    txt(svg, W / 2, H / 2, "No cached price history for this ticker", { "text-anchor": "middle" });
+    return;
+  }
+  const t = s.d.map(d => d * DAY), p = s.p;
+  const pos = p.filter(v => v > 0);
+  const y0 = Math.min(...pos) * 0.85, y1 = Math.max(...pos) * 1.15;
+  const X = linScale(t[0], t[t.length - 1], m.l, W - m.r), Y = logScale(y0, y1, H - m.b, m.t);
+  for (const v of logTicks(y0, y1)) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)" }, svg);
+    txt(svg, m.l - 6, Y(v) + 4, fmtPrice(v), { "text-anchor": "end" });
+  }
+  yearTicks(svg, X, t[0], t[t.length - 1], W, m, H - m.b + 16);
+  el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }, svg);
+  for (const a of (FUND[r.ticker]?.a || [])) {
+    const ta = a * DAY; if (ta < t[0] || ta > t[t.length - 1]) continue;
+    el("line", { x1: X(ta), x2: X(ta), y1: H - m.b, y2: H - m.b - 6, stroke: "var(--muted)", "stroke-width": 1.5 }, svg);
+  }
+
+  let d = "";
+  p.forEach((v, i) => { if (v > 0) d += (d ? "L" : "M") + X(t[i]).toFixed(1) + "," + Y(v).toFixed(1); });
+  el("path", { d, fill: "none", stroke: "var(--series-1)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+
+  // For a crossing, mark the crossing quarter on the price chart; a failure has no such event to mark.
+  const tc = kind === "crossing" && r.crossing_period_end ? Date.parse(r.crossing_period_end) : null;
+  if (tc != null && tc >= t[0] && tc <= t[t.length - 1]) {
+    let lo = 0, hi = t.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] < tc) lo = mid; else hi = mid; }
+    const i = Math.abs(t[lo] - tc) < Math.abs(t[hi] - tc) ? lo : hi;
+    const cx = X(t[i]), cy = Y(p[i]);
+    el("circle", { cx, cy, r: 5, fill: "var(--select)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const flip = cx > W - m.r - 140;
+    txt(svg, cx + (flip ? -9 : 9), cy - 8, `Crossed ${r.crossing_period_end}`, { class: "lbl", "text-anchor": flip ? "end" : "start" });
+  }
+  detailScale = { t0: t[0], t1: t[t.length - 1], W, m: { ...m }, ts: tc, tp: tc != null ? t[t.length - 1] : null };
+
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: "var(--axis)", visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 4, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }, svg);
+  const tip = document.createElement("div"); tip.className = "tip"; plot.appendChild(tip);
+  svg.addEventListener("pointermove", e => {
+    const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    const tm = t[0] + (px - m.l) / (W - m.l - m.r) * (t[t.length - 1] - t[0]);
+    let lo = 0, hi = t.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] < tm) lo = mid; else hi = mid; }
+    const i = Math.abs(t[lo] - tm) < Math.abs(t[hi] - tm) ? lo : hi;
+    if (!(p[i] > 0)) return;
+    const cx = X(t[i]), cy = Y(p[i]);
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", cx); dot.setAttribute("cy", cy); dot.setAttribute("visibility", "visible");
+    tipShow(tip, plot, cx * b.width / W, cy * b.height / H, [["Week of " + fmtDate(t[i])], ["adj. close", fmtPrice(p[i])]]);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+  renderFund(r);
+  renderQuarterTable(r);
+}
+
+// ---------- fundamentals bar chart (same x scale as the price chart) ----------
+function renderFund(r) {
+  const plot = document.getElementById("fund");
+  plot.replaceChildren();
+  const f = r && FUND[r.ticker];
+  const W = plot.clientWidth, H = 190;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Quarterly ${METRICS[fundMetric][0]} for ${r ? r.ticker : ""}` }, plot);
+  if (!f || !detailScale || detailScale.t0 == null) {
+    txt(svg, W / 2, H / 2, "No SEC quarterly data for this stock (e.g. foreign filer or no XBRL filings)", { "text-anchor": "middle" });
+    return;
+  }
+  const { t0, t1, ts, tp } = detailScale, m = { ...detailScale.m, t: 10, b: 26 };
+  const X = linScale(t0, t1, m.l, W - m.r);
+  const [label, fmt] = METRICS[fundMetric];
+  const q = f.a.map((a, i) => ({ t: a * DAY, pe: f.pe[i] * DAY, src: f.src[i], v: f[fundMetric][i], i }))
+    .filter(d => d.v != null && d.t >= t0 && d.t <= t1);
+  if (ts != null && tp != null) el("rect", { x: X(ts), y: m.t, width: Math.max(1, X(tp) - X(ts)), height: H - m.b - m.t, fill: "var(--band)" }, svg);
+  yearTicks(svg, X, t0, t1, W, m, H - m.b + 16);
+  if (!q.length) { txt(svg, W / 2, H / 2, `No ${label.toLowerCase()} reported in this period`, { "text-anchor": "middle" }); return; }
+
+  const vals = q.map(d => d.v);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  if (fundMetric === "revenue_yoy_pct") { hi = Math.min(hi, 400); lo = Math.max(lo, -100); }
+  const ticks = niceTicks(lo, hi);
+  lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  const Y = linScale(lo, hi, H - m.b, m.t);
+  const fmtAxis = fundMetric === "revenue_yoy_pct" ? v => v + "%" : fundMetric === "eps" ? fmtEps : fmtMoney;
+  for (const v of ticks) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)" }, svg);
+    txt(svg, m.l - 6, Y(v) + 4, fmtAxis(v), { "text-anchor": "end" });
+  }
+  const bw = Math.max(2, Math.min(14, (X(t0 + 91 * DAY) - X(t0)) * 0.6));
+  const y0 = Y(0);
+  const bars = [];
+  for (const d of q) {
+    const vy = Y(Math.max(lo, Math.min(hi, d.v)));
+    const top = Math.min(vy, y0), h = Math.max(1, Math.abs(vy - y0));
+    const b = el("rect", { x: X(d.t) - bw / 2, y: top, width: bw, height: h, rx: Math.min(2, bw / 3),
+      fill: d.v < 0 ? "var(--down)" : "var(--series-1)" }, svg);
+    const link = f.links?.[d.i] || {};
+    if (link.release || link.filing) b.style.cursor = "pointer";
+    bars.push([X(d.t), d, b]);
+  }
+  const tip = document.createElement("div"); tip.className = "tip"; plot.appendChild(tip);
+  let active = null;
+  svg.addEventListener("pointermove", e => {
+    const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    let best = null, bd = Infinity;
+    for (const s of bars) { const dd = Math.abs(s[0] - px); if (dd < bd) { bd = dd; best = s; } }
+    if (!best || bd > 20) { tip.style.display = "none"; if (active) active.removeAttribute("stroke"); active = null; return; }
+    if (active) active.removeAttribute("stroke");
+    active = best[2]; active.setAttribute("stroke", "var(--ink)"); active.setAttribute("stroke-width", "1.5");
+    const d = best[1], lines = [["Quarter ended " + fmtDate(d.pe)], [label.toLowerCase(), fmt(d.v)]];
+    if (fundMetric === "revenue" && f.revenue_yoy_pct[d.i] != null) lines.push(["YoY", fmtPct(f.revenue_yoy_pct[d.i])]);
+    lines.push(["announced", fmtDate(d.t) + (d.src === "8-K" ? " (8-K)" : " (10-Q/K filing)")]);
+    const link = f.links?.[d.i] || {};
+    if (link.release) lines.push(["", "Click to open the press release"]);
+    else if (link.filing) lines.push(["", "Click to open the filing"]);
+    tipShow(tip, plot, best[0] * b.width / W, Y(Math.max(0, Math.min(hi, d.v))) * b.height / H, lines);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; if (active) active.removeAttribute("stroke"); active = null; });
+  svg.addEventListener("click", () => {
+    if (!active) return;
+    const hit = bars.find(s => s[2] === active);
+    const link = hit && (f.links?.[hit[1].i] || {});
+    const url = link && (link.release || link.filing);
+    if (url) window.open(url, "_blank", "noopener");
+  });
+}
+
+function renderQuarterTable(r) {
+  const tbody = document.querySelector("#qtable tbody");
+  tbody.replaceChildren();
+  const f = r && FUND[r.ticker];
+  if (!f) return;
+  const ts = detailScale?.ts, tp = detailScale?.tp;
+  const cell = (tr, text, num) => { const td = document.createElement("td"); td.textContent = text; if (num) td.className = "num"; tr.appendChild(td); return td; };
+  for (let i = f.a.length - 1; i >= 0; i--) {
+    const tr = document.createElement("tr");
+    const ta = f.a[i] * DAY;
+    if (ts != null && tp != null && ta >= ts && ta <= tp) tr.className = "inrun";
+    cell(tr, fmtDate(f.pe[i] * DAY));
+    cell(tr, fmtDate(ta) + (f.src[i] === "8-K" ? "" : " *"));
+    cell(tr, fmtMoney(f.revenue[i]), true);
+    const yoy = cell(tr, fmtPct(f.revenue_yoy_pct[i]), true);
+    if (f.revenue_yoy_pct[i] != null) yoy.classList.add(f.revenue_yoy_pct[i] >= 0 ? "up" : "down");
+    cell(tr, fmtEps(f.eps[i]), true);
+    cell(tr, fmtMoney(f.net_income[i]), true);
+    const docs = cell(tr, "");
+    const link = f.links?.[i] || {};
+    for (const [key, label] of [["release", "Press release"], ["commentary", "Commentary"], ["filing", "Filing"]]) {
+      if (!link[key]) continue;
+      const a = document.createElement("a");
+      a.href = link[key]; a.target = "_blank"; a.rel = "noopener"; a.textContent = label;
+      docs.appendChild(a);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+document.querySelectorAll("#fund-metric button").forEach(btn => btn.addEventListener("click", () => {
+  fundMetric = btn.dataset.k;
+  document.querySelectorAll("#fund-metric button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  renderFund(selected ? findRow(selected) : null);
+}));
+
+// ---------- tables ----------
+const COLS = {
+  crossings: [
+    ["ticker", "Ticker", "str"], ["name", "Name", "str"],
+    ["crossover_date", "Crossover Date", "str", v => v == null ? "–" : fmtDate(v)],
+    ["crossing_period_end", "Crossed", "str"], ["quarters_since_crossing", "Qtrs since", "num", v => v],
+    ["quarters_of_prior_history", "Prior history", "num", v => v], ["wobble_quarters", "Wobbles", "num", v => v],
+    ["latest_revenue", "Latest revenue", "num", fmtMoney], ["latest_net_income", "Latest net income", "num", fmtMoney],
+    ["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+  ],
+  failures: [
+    ["ticker", "Ticker", "str"], ["name", "Name", "str"],
+    ["quarters_of_history", "Quarters", "num", v => v], ["quarters_with_revenue", "With revenue", "num", v => v],
+    ["cumulative_revenue", "Lifetime revenue", "num", fmtMoney], ["cumulative_losses", "Lifetime losses", "num", fmtMoney],
+    ["revenue_to_burn_ratio", "Revenue/burn", "num", fmtRatio],
+    ["latest_net_income", "Latest net income", "num", fmtMoney],
+    ["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+  ],
+};
+const TABLE_NOTES = {
+  crossings: "Sorted by how many quarters have passed since the crossing - fewer means more recent. A confirmed crossing needs at least 2 quarters of track record since.",
+  failures: "Sorted by revenue-to-burn ratio, worst first. A low ratio alone doesn't distinguish a genuinely failing company from an early-stage business (e.g. a pre-revenue biotech) that simply hasn't launched yet - read the fundamentals score for that judgment.",
+};
+let sortKey = { crossings: "quarters_since_crossing", failures: "revenue_to_burn_ratio" };
+let sortDir = { crossings: 1, failures: 1 };
+let currentList = [];
+
+function matches(r) {
+  if (!filterText) return true;
+  return [r.ticker, r.name].some(v => v && String(v).toLowerCase().includes(filterText));
+}
+
+function renderTable() {
+  const cols = COLS[activeTab], list0 = LISTS[activeTab];
+  document.getElementById("table-note").textContent = TABLE_NOTES[activeTab];
+  const thead = document.querySelector("#table thead"), tbody = document.querySelector("#table tbody");
+  const hr = document.createElement("tr");
+  for (const [key, label, kind] of cols) {
+    const th = document.createElement("th");
+    th.textContent = label + (key === sortKey[activeTab] ? (sortDir[activeTab] < 0 ? " ↓" : " ↑") : "");
+    if (kind === "num") th.className = "num";
+    th.addEventListener("click", () => {
+      sortDir[activeTab] = key === sortKey[activeTab] ? -sortDir[activeTab] : (kind === "num" ? -1 : 1);
+      sortKey[activeTab] = key; renderTable();
+    });
+    hr.appendChild(th);
+  }
+  thead.replaceChildren(hr);
+  const list = list0.filter(matches).sort((a, b) => {
+    const k = sortKey[activeTab], x = a[k], y = b[k];
+    if (x == null) return 1; if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sortDir[activeTab];
+  });
+  currentList = list;
+  tbody.replaceChildren();
+  for (const r of list) {
+    const tr = document.createElement("tr");
+    if (r.ticker === selected) tr.className = "sel";
+    for (const [key, , kind, fmt] of cols) {
+      const td = document.createElement("td");
+      const v = r[key];
+      td.textContent = fmt ? fmt(v) : (v ?? "–");
+      if (kind === "num") td.className = "num";
+      if (key === "name") td.className = "name";
+      if (key === "ticker") td.style.fontWeight = "600";
+      if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
+      if (key === "revenue_to_burn_ratio" && v != null) td.classList.add("down");
+      tr.appendChild(td);
+    }
+    tr.addEventListener("click", () => select(r.ticker));
+    tbody.appendChild(tr);
+  }
+  document.getElementById("count").textContent = `${list.length} of ${list0.length} shown`;
+}
+
+function select(ticker) {
+  selected = ticker;
+  renderDetail(); renderTable();
+}
+
+document.querySelectorAll("#tabs button").forEach(btn => btn.addEventListener("click", () => {
+  activeTab = btn.dataset.t;
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  filterText = ""; document.getElementById("search").value = "";
+  renderTable();
+}));
+document.getElementById("search").addEventListener("input", e => { filterText = e.target.value.trim().toLowerCase(); renderTable(); });
+
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+document.getElementById("export-csv").addEventListener("click", () => {
+  const cols = COLS[activeTab];
+  const lines = [cols.map(([, label]) => csvCell(label)).join(",")];
+  for (const r of currentList) {
+    lines.push(cols.map(([key, , , fmt]) => csvCell(fmt ? fmt(r[key]) : (r[key] ?? ""))).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${activeTab}_${DATA.generated}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+let lastWidth = 0, resizeTimer;
+new ResizeObserver(entries => {
+  const w = Math.round(entries[0].contentRect.width);
+  if (w === lastWidth) return;
+  lastWidth = w;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(renderDetail, 60);
+}).observe(document.getElementById("detail"));
+
+renderHeader(); renderDetail(); renderTable();
+</script>
+</body>
+</html>

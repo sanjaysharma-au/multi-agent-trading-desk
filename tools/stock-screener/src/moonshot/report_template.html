@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multibagger Report</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6;
+  --select: #eb6834;
+  --band: rgba(42,120,214,0.10);
+  --up: #006300;
+  --down: #d03b3b;
+  --up-bg: rgba(0,99,0,0.08);
+  --down-bg: rgba(208,59,59,0.08);
+  --hover: rgba(11,11,11,0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --select: #d95926; --band: rgba(57,135,229,0.16);
+    --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --select: #d95926; --band: rgba(57,135,229,0.16);
+  --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 2px; }
+.sub { color: var(--ink-2); margin: 0 0 20px; }
+.note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.tile { padding: 14px 16px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+@media (max-width: 860px) { .charts { grid-template-columns: 1fr; } }
+.card { padding: 14px 16px; min-width: 0; }
+.plot { position: relative; }
+.plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.plot text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.plot .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.plot .lbl { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; fill: var(--ink-2); font-size: 11px; font-weight: 600; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); white-space: nowrap; display: none; z-index: 2; }
+.tip strong { font-variant-numeric: tabular-nums; }
+.tip .k { color: var(--ink-2); }
+.toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.toolbar input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); min-width: 220px; }
+.toolbar .count { color: var(--muted); font-size: 12px; }
+.tablewrap { overflow: auto; max-height: 560px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; cursor: pointer; user-select: none; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--hover); }
+tbody tr.sel { box-shadow: inset 3px 0 0 var(--select); background: var(--hover); }
+td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--ink-2); }
+.up { color: var(--up); } .down { color: var(--down); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; margin: 4px 0 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 12px; padding: 4px 10px; border: 0; background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--axis); }
+.seg button[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.detail-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px 12px; flex-wrap: wrap; }
+.score-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+.score-badge.up { color: var(--up); background: var(--up-bg); }
+.score-badge.down { color: var(--down); background: var(--down-bg); }
+.score-rationale { font-style: italic; }
+.fund-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
+.fund-head h3 { font-size: 13px; margin: 0; }
+.qwrap { overflow: auto; max-height: 260px; margin-top: 10px; border-top: 1px solid var(--grid); }
+.qwrap table { font-size: 12px; }
+.qwrap th { cursor: default; }
+.qwrap tbody tr { cursor: default; }
+.qwrap tr.inrun td { background: var(--band); }
+.qwrap a { color: var(--series-1); text-decoration: none; margin-right: 10px; }
+.qwrap a:hover { text-decoration: underline; }
+.legend i.band { border-radius: 2px; background: var(--band); border: 1px solid var(--series-1); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Multibagger Report</h1>
+  <p class="sub" id="sub"></p>
+  <section class="tiles" id="tiles"></section>
+  <section class="charts">
+    <div class="card">
+      <h2>Peak multiple vs where it is today</h2>
+      <p class="note">Each dot is one stock. Both axes use a log scale. Dots below the 1× line are now below the start of their run. Click a dot to chart it.</p>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>Stock</span><span><i style="background:var(--select)"></i>Selected</span></div>
+      <div class="plot" id="scatter"></div>
+    </div>
+    <div class="card">
+      <div class="detail-head">
+        <h2 id="detail-title">Price history</h2>
+        <div class="score-badge" id="score-badge" hidden></div>
+      </div>
+      <p class="note score-rationale" id="score-rationale" hidden></p>
+      <p class="note" id="detail-note">Adjusted close, weekly, log scale. The shaded area is the run from start to peak. Ticks on the baseline mark earnings announcements.</p>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>Adjusted close</span><span><i class="band"></i>Run window</span></div>
+      <div class="plot" id="detail"></div>
+      <div id="fund-wrap">
+        <div class="fund-head">
+          <h3>Quarterly results, plotted on announcement date</h3>
+          <div class="seg" id="fund-metric" role="group" aria-label="Fundamental metric">
+            <button data-k="revenue" aria-pressed="true">Revenue</button><button data-k="revenue_yoy_pct" aria-pressed="false">Revenue YoY</button><button data-k="eps" aria-pressed="false">EPS</button><button data-k="net_income" aria-pressed="false">Net income</button>
+          </div>
+        </div>
+        <p class="note" id="fund-note">Each bar is one quarter, placed on the day results were announced (the 8-K earnings release), not the day the quarter ended. Source: SEC EDGAR.</p>
+        <div class="plot" id="fund"></div>
+        <p class="note">Click a bar to open that quarter's press release. Shaded rows were announced during the run. * = no 8-K found, so the 10-Q/10-K filing date is used.</p>
+        <div class="qwrap"><table id="qtable"><thead><tr>
+          <th>Quarter ended</th><th>Announced</th><th class="num">Revenue</th><th class="num">YoY</th><th class="num">EPS</th><th class="num">Net income</th><th>Documents</th>
+        </tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Filter by ticker, name, sector…" aria-label="Filter table">
+      <span class="count" id="count"></span>
+    </div>
+    <div class="tablewrap"><table id="table"><thead></thead><tbody></tbody></table></div>
+  </section>
+</main>
+<script>
+const DATA = /*DATA*/null;
+const rows = DATA.rows, series = DATA.series;
+const DAY = 86400000;
+const NS = "http://www.w3.org/2000/svg";
+let selected = rows.length ? rows[0].ticker : null;
+let filterText = "";
+
+const fmtX = v => v == null ? "–" : (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + "×";
+const fmtPrice = v => v == null ? "–" : "$" + (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toPrecision(3));
+const fmtTick = v => (v >= 1 ? String(+v.toFixed(0)) : String(+v.toPrecision(2))) + "×";
+const fmtMoney = v => { if (v == null) return "–"; if (v === 0) return "$0"; const a = Math.abs(v), sg = v < 0 ? "-" : "";
+  return sg + (a >= 1e9 ? "$" + (a / 1e9).toFixed(a >= 1e10 ? 1 : 2) + "B" : a >= 1e6 ? "$" + (a / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M" : "$" + (a / 1e3).toFixed(0) + "K"); };
+const fmtEps = v => v == null ? "–" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+const FUND = DATA.fundamentals || {};
+const METRICS = {
+  revenue: ["Revenue", fmtMoney], revenue_yoy_pct: ["Revenue YoY", v => fmtPct(v)],
+  eps: ["Diluted EPS", fmtEps], net_income: ["Net income", fmtMoney],
+};
+let fundMetric = "revenue";
+let detailScale = null;
+function niceTicks(lo, hi, n = 4) {
+  const span = hi - lo || 1, raw = span / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(k => k * mag).find(k => span / k <= n) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+function yearTicks(svg, X, t0, t1, W, m, yPos) {
+  const yrA = new Date(t0).getUTCFullYear(), yrB = new Date(t1).getUTCFullYear();
+  const step = Math.max(1, Math.ceil((yrB - yrA + 1) / Math.max(2, Math.floor((W - m.l - m.r) / 70))));
+  for (let y = yrA + 1; y <= yrB; y += step) txt(svg, X(Date.UTC(y, 0, 1)), yPos, String(y), { "text-anchor": "middle" });
+}
+const fmtPct = v => v == null ? "–" : (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+const scoreBand = v => v == null ? null : v > 50 ? "Moonshot signal" : v > 0 ? "Improving" : v === 0 ? "Neutral"
+  : v >= -50 ? "Weakening" : "Distress risk";
+function renderScoreBadge(r) {
+  const badge = document.getElementById("score-badge"), note = document.getElementById("score-rationale");
+  const v = r ? r.nemotron_score : null;
+  if (v == null || Number.isNaN(v)) { badge.hidden = true; note.hidden = true; return; }
+  badge.hidden = false;
+  badge.className = "score-badge" + (v > 0 ? " up" : v < 0 ? " down" : "");
+  badge.textContent = `Fundamentals score ${v > 0 ? "+" : ""}${v} · ${scoreBand(v)}`;
+  if (r.nemotron_rationale) {
+    note.hidden = false;
+    note.textContent = "Nemotron, blind to price: " + r.nemotron_rationale;
+  } else {
+    note.hidden = true;
+  }
+}
+const fmtCap = v => v == null ? "–" : v >= 1e12 ? "$" + (v / 1e12).toFixed(1) + "T" : v >= 1e9 ? "$" + (v / 1e9).toFixed(1) + "B" : "$" + (v / 1e6).toFixed(0) + "M";
+const fmtDate = ms => new Date(ms).toISOString().slice(0, 10);
+const median = a => { const s = a.filter(v => v != null).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+function txt(parent, x, y, s, attrs = {}) { const t = el("text", { x, y, ...attrs }, parent); t.textContent = s; return t; }
+function logScale(d0, d1, r0, r1) { const a = Math.log(d0), b = Math.log(d1); return v => r0 + (Math.log(v) - a) / (b - a) * (r1 - r0); }
+function linScale(d0, d1, r0, r1) { return v => r0 + (v - d0) / (d1 - d0 || 1) * (r1 - r0); }
+function logTicks(lo, hi) {
+  const out = [];
+  for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++)
+    for (const m of [1, 2, 5]) { const v = m * 10 ** e; if (v >= lo && v <= hi) out.push(v); }
+  return out.length > 7 ? out.filter(v => /^1/.test(String(v)) || v === out[0]) : out;
+}
+function tipShow(tip, plot, x, y, lines) {
+  tip.replaceChildren();
+  lines.forEach(([k, v], i) => {
+    const div = document.createElement("div");
+    if (i === 0) { const s = document.createElement("strong"); s.textContent = k; div.appendChild(s); }
+    else { const s = document.createElement("strong"); s.textContent = v; const l = document.createElement("span"); l.className = "k"; l.textContent = " " + k; div.append(s, l); }
+    tip.appendChild(div);
+  });
+  tip.style.display = "block";
+  const w = plot.clientWidth, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, x + 12), w - tw) + "px";
+  tip.style.top = Math.max(0, y - tip.offsetHeight - 10) + "px";
+}
+
+// ---------- header + tiles ----------
+function renderHeader() {
+  document.getElementById("sub").textContent =
+    `${rows.length} stocks rose ≥ ${DATA.multiple}× within their window · source ${DATA.source} · generated ${DATA.generated}`;
+  const held = rows.filter(r => r.current_multiple >= DATA.multiple).length;
+  const below = rows.filter(r => r.current_multiple < 1).length;
+  const tiles = [
+    ["Multibaggers found", String(rows.length)],
+    ["Median peak multiple", fmtX(median(rows.map(r => r.multiple)))],
+    [`Still ≥ ${DATA.multiple}× from start today`, `${held} (${rows.length ? Math.round(held / rows.length * 100) : 0}%)`],
+    ["Now below where the run began", `${below} (${rows.length ? Math.round(below / rows.length * 100) : 0}%)`],
+  ];
+  const box = document.getElementById("tiles");
+  for (const [label, value] of tiles) {
+    const t = document.createElement("div"); t.className = "tile";
+    const l = document.createElement("div"); l.className = "label"; l.textContent = label;
+    const v = document.createElement("div"); v.className = "value"; v.textContent = value;
+    t.append(l, v); box.appendChild(t);
+  }
+}
+
+// ---------- scatter ----------
+function matches(r) {
+  if (!filterText) return true;
+  return [r.ticker, r.name, r.sector, r.industry, r.exchange].some(v => v && String(v).toLowerCase().includes(filterText));
+}
+function renderScatter() {
+  const plot = document.getElementById("scatter");
+  plot.replaceChildren();
+  const W = plot.clientWidth, H = Object.keys(FUND).length ? 520 : 330, m = { t: 24, r: 14, b: 34, l: 46 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Scatter of peak multiple versus current multiple" }, plot);
+  const pts = rows.filter(r => r.multiple > 0 && r.current_multiple > 0);
+  if (!pts.length) return;
+  const xs = pts.map(r => r.multiple), ys = pts.map(r => r.current_multiple);
+  const x0 = Math.min(...xs) * 0.9, x1 = Math.max(...xs) * 1.1;
+  const y0 = Math.min(0.5, ...ys) * 0.8, y1 = Math.max(...ys) * 1.25;
+  const X = logScale(x0, x1, m.l, W - m.r), Y = logScale(y0, y1, H - m.b, m.t);
+  for (const v of logTicks(y0, y1)) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)" }, svg);
+    txt(svg, m.l - 6, Y(v) + 4, fmtTick(v), { "text-anchor": "end" });
+  }
+  for (const v of logTicks(x0, x1)) txt(svg, X(v), H - m.b + 16, fmtTick(v), { "text-anchor": "middle" });
+  txt(svg, (m.l + W - m.r) / 2, H - 4, "Peak multiple during run →", { "text-anchor": "middle" });
+  // Reference lines: 1× (back to start) and the threshold.
+  for (const [v, label] of [[1, "1× · back to start"], [DATA.multiple, `${DATA.multiple}× threshold`]]) {
+    if (v < y0 || v > y1) continue;
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--axis)", "stroke-width": 1.5 }, svg);
+    txt(svg, W - m.r - 4, Y(v) - 4, label, { "text-anchor": "end", class: "halo" });
+  }
+  el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }, svg);
+  txt(svg, m.l - 40, 10, "Multiple today ↑", { "text-anchor": "start" });
+
+  const screen = [];
+  const gAll = el("g", {}, svg);
+  for (const r of pts) {
+    if (r.ticker === selected) continue;
+    const on = matches(r);
+    const c = el("circle", { cx: X(r.multiple), cy: Y(r.current_multiple), r: 4.5, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2, opacity: on ? 0.85 : 0.12 }, gAll);
+    if (on) screen.push([X(r.multiple), Y(r.current_multiple), r]);
+  }
+  const sel = pts.find(r => r.ticker === selected);
+  if (sel) {
+    const cx = X(sel.multiple), cy = Y(sel.current_multiple);
+    el("circle", { cx, cy, r: 6.5, fill: "var(--select)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    txt(svg, cx + 10, cy + 4, sel.ticker, { class: "lbl" });
+    screen.push([cx, cy, sel]);
+  }
+  const hl = el("circle", { r: 8, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5, visibility: "hidden" }, svg);
+
+  const tip = document.createElement("div"); tip.className = "tip"; plot.appendChild(tip);
+  const nearest = e => {
+    const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width, py = (e.clientY - b.top) * H / b.height;
+    let best = null, bd = 18 * 18;
+    for (const s of screen) { const d = (s[0] - px) ** 2 + (s[1] - py) ** 2; if (d < bd) { bd = d; best = s; } }
+    return best;
+  };
+  svg.addEventListener("pointermove", e => {
+    const s = nearest(e);
+    if (!s) { tip.style.display = "none"; hl.setAttribute("visibility", "hidden"); svg.style.cursor = ""; return; }
+    const r = s[2];
+    hl.setAttribute("cx", s[0]); hl.setAttribute("cy", s[1]); hl.setAttribute("visibility", "visible");
+    svg.style.cursor = "pointer";
+    const b = svg.getBoundingClientRect();
+    tipShow(tip, plot, s[0] * b.width / W, s[1] * b.height / H, [
+      [r.ticker + (r.name ? " · " + r.name : "")],
+      ["peak multiple", fmtX(r.multiple)],
+      ["multiple today", fmtX(r.current_multiple)],
+      ["run", `${r.start_date} → ${r.peak_date}`],
+      ...(r.nemotron_score != null ? [["fundamentals score", (r.nemotron_score > 0 ? "+" : "") + r.nemotron_score]] : []),
+    ]);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; hl.setAttribute("visibility", "hidden"); });
+  svg.addEventListener("click", e => { const s = nearest(e); if (s) select(s[2].ticker, true); });
+}
+
+// ---------- detail ----------
+function renderDetail() {
+  const plot = document.getElementById("detail");
+  plot.replaceChildren();
+  const r = rows.find(x => x.ticker === selected);
+  const title = document.getElementById("detail-title");
+  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); return; }
+  title.textContent = `${r.ticker}${r.name ? " · " + r.name : ""}`;
+  renderScoreBadge(r);
+  const s = series[r.ticker];
+  const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
+  if (!s || !s.d.length) { detailScale = null; renderFund(r); txt(svg, W / 2, H / 2, "No cached price history for this ticker", { "text-anchor": "middle" }); return; }
+  const t = s.d.map(d => d * DAY), p = s.p;
+  const pos = p.filter(v => v > 0);
+  const y0 = Math.min(...pos, r.start_price) * 0.85, y1 = Math.max(...pos, r.peak_price) * 1.15;
+  const X = linScale(t[0], t[t.length - 1], m.l, W - m.r), Y = logScale(y0, y1, H - m.b, m.t);
+  for (const v of logTicks(y0, y1)) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)" }, svg);
+    txt(svg, m.l - 6, Y(v) + 4, fmtPrice(v), { "text-anchor": "end" });
+  }
+  yearTicks(svg, X, t[0], t[t.length - 1], W, m, H - m.b + 16);
+  el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }, svg);
+  for (const a of (FUND[r.ticker]?.a || [])) {
+    const ta = a * DAY; if (ta < t[0] || ta > t[t.length - 1]) continue;
+    el("line", { x1: X(ta), x2: X(ta), y1: H - m.b, y2: H - m.b - 6, stroke: "var(--muted)", "stroke-width": 1.5 }, svg);
+  }
+  detailScale = { t0: t[0], t1: t[t.length - 1], W, m: { ...m }, ts: Date.parse(r.start_date), tp: Date.parse(r.peak_date) };
+
+  const ts = Date.parse(r.start_date), tp = Date.parse(r.peak_date);
+  el("rect", { x: X(ts), y: m.t, width: Math.max(1, X(tp) - X(ts)), height: H - m.b - m.t, fill: "var(--band)" }, svg);
+
+  let d = "";
+  p.forEach((v, i) => { if (v > 0) d += (d ? "L" : "M") + X(t[i]).toFixed(1) + "," + Y(v).toFixed(1); });
+  el("path", { d, fill: "none", stroke: "var(--series-1)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+
+  for (const [tm, v, label, anchor] of [[ts, r.start_price, "Start " + fmtPrice(r.start_price), "start"],
+                                        [tp, r.peak_price, `Peak ${fmtPrice(r.peak_price)} · ${fmtX(r.multiple)}`, "end"]]) {
+    const cx = X(tm), cy = Y(v);
+    el("circle", { cx, cy, r: 5, fill: "var(--select)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const flip = anchor === "end" ? cx < m.l + 170 : cx > W - m.r - 110;
+    txt(svg, cx + ((anchor === "end") !== flip ? -9 : 9), anchor === "end" ? cy - 8 : cy + 16, label,
+        { class: "lbl", "text-anchor": (anchor === "end") !== flip ? "end" : "start" });
+  }
+
+  const cross = el("line", { y1: m.t, y2: H - m.b, stroke: "var(--axis)", visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 4, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }, svg);
+  const tip = document.createElement("div"); tip.className = "tip"; plot.appendChild(tip);
+  svg.addEventListener("pointermove", e => {
+    const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    const tm = t[0] + (px - m.l) / (W - m.l - m.r) * (t[t.length - 1] - t[0]);
+    let lo = 0, hi = t.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] < tm) lo = mid; else hi = mid; }
+    const i = Math.abs(t[lo] - tm) < Math.abs(t[hi] - tm) ? lo : hi;
+    if (!(p[i] > 0)) return;
+    const cx = X(t[i]), cy = Y(p[i]);
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", cx); dot.setAttribute("cy", cy); dot.setAttribute("visibility", "visible");
+    tipShow(tip, plot, cx * b.width / W, cy * b.height / H, [
+      ["Week of " + fmtDate(t[i])],
+      ["adj. close", fmtPrice(p[i])],
+      ["vs run start", fmtX(p[i] / r.start_price)],
+    ]);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
+  renderFund(r);
+  renderQuarterTable(r);
+}
+
+// ---------- fundamentals (same x scale as the price chart) ----------
+function renderFund(r) {
+  const plot = document.getElementById("fund");
+  plot.replaceChildren();
+  const f = r && FUND[r.ticker];
+  document.getElementById("fund-wrap").style.display = DATA.fundamentals ? "" : "none";
+  const W = plot.clientWidth, H = 190;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Quarterly ${METRICS[fundMetric][0]} for ${r ? r.ticker : ""}` }, plot);
+  if (!f || !detailScale) {
+    const top = DATA.fundamentals_top;
+    txt(svg, W / 2, H / 2, r && top && !(r.ticker in FUND) && rows.findIndex(x => x.ticker === r.ticker) >= top
+      ? `Fundamentals are loaded for the top ${top} stocks by multiple only`
+      : "No SEC quarterly data for this stock (e.g. foreign filer or no XBRL filings)", { "text-anchor": "middle" });
+    return;
+  }
+  const { t0, t1, ts, tp } = detailScale, m = { ...detailScale.m, t: 10, b: 26 };
+  const X = linScale(t0, t1, m.l, W - m.r);
+  const [label, fmt] = METRICS[fundMetric];
+  const q = f.a.map((a, i) => ({ t: a * DAY, pe: f.pe[i] * DAY, src: f.src[i], v: f[fundMetric][i], i }))
+    .filter(d => d.v != null && d.t >= t0 && d.t <= t1);
+  el("rect", { x: X(ts), y: m.t, width: Math.max(1, X(tp) - X(ts)), height: H - m.b - m.t, fill: "var(--band)" }, svg);
+  yearTicks(svg, X, t0, t1, W, m, H - m.b + 16);
+  if (!q.length) { txt(svg, W / 2, H / 2, `No ${label.toLowerCase()} reported in this period`, { "text-anchor": "middle" }); return; }
+
+  const vals = q.map(d => d.v);
+  let lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  // Clip extreme YoY outliers so one quarter does not flatten the rest.
+  if (fundMetric === "revenue_yoy_pct") { hi = Math.min(hi, 400); lo = Math.max(lo, -100); }
+  const ticks = niceTicks(lo, hi);
+  lo = Math.min(lo, ticks[0]); hi = Math.max(hi, ticks[ticks.length - 1]);
+  const Y = linScale(lo, hi, H - m.b, m.t);
+  const fmtAxis = fundMetric === "revenue_yoy_pct" ? v => v + "%" : fundMetric === "eps" ? fmtEps : fmtMoney;
+  for (const v of ticks) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)" }, svg);
+    txt(svg, m.l - 6, Y(v) + 4, fmtAxis(v), { "text-anchor": "end" });
+  }
+  const bw = Math.max(2, Math.min(14, (X(t0 + 91 * DAY) - X(t0)) * 0.6));
+  const y0 = Y(0);
+  const bars = [];
+  for (const d of q) {
+    const vy = Y(Math.max(lo, Math.min(hi, d.v)));
+    const top = Math.min(vy, y0), h = Math.max(1, Math.abs(vy - y0));
+    const b = el("rect", { x: X(d.t) - bw / 2, y: top, width: bw, height: h, rx: Math.min(2, bw / 3),
+      fill: d.v < 0 ? "var(--down)" : "var(--series-1)" }, svg);
+    const link = f.links?.[d.i] || {};
+    if (link.release || link.filing) b.style.cursor = "pointer";
+    bars.push([X(d.t), d, b]);
+  }
+  const tip = document.createElement("div"); tip.className = "tip"; plot.appendChild(tip);
+  let active = null;
+  svg.addEventListener("pointermove", e => {
+    const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) * W / b.width;
+    let best = null, bd = Infinity;
+    for (const s of bars) { const dd = Math.abs(s[0] - px); if (dd < bd) { bd = dd; best = s; } }
+    if (!best || bd > 20) { tip.style.display = "none"; if (active) active.removeAttribute("stroke"); active = null; return; }
+    if (active) active.removeAttribute("stroke");
+    active = best[2]; active.setAttribute("stroke", "var(--ink)"); active.setAttribute("stroke-width", "1.5");
+    const d = best[1], lines = [["Quarter ended " + fmtDate(d.pe)], [label.toLowerCase(), fmt(d.v)]];
+    if (fundMetric === "revenue" && f.revenue_yoy_pct[d.i] != null) lines.push(["YoY", fmtPct(f.revenue_yoy_pct[d.i])]);
+    lines.push(["announced", fmtDate(d.t) + (d.src === "8-K" ? " (8-K)" : " (10-Q/K filing)")]);
+    const link = f.links?.[d.i] || {};
+    if (link.release) lines.push(["", "Click to open the press release"]);
+    else if (link.filing) lines.push(["", "Click to open the filing"]);
+    tipShow(tip, plot, best[0] * b.width / W, Y(Math.max(0, Math.min(hi, d.v))) * b.height / H, lines);
+  });
+  svg.addEventListener("pointerleave", () => { tip.style.display = "none"; if (active) active.removeAttribute("stroke"); active = null; });
+  svg.addEventListener("click", () => {
+    if (!active) return;
+    const hit = bars.find(s => s[2] === active);
+    const link = hit && (f.links?.[hit[1].i] || {});
+    const url = link && (link.release || link.filing);
+    if (url) window.open(url, "_blank", "noopener");
+  });
+}
+
+function renderQuarterTable(r) {
+  const tbody = document.querySelector("#qtable tbody");
+  tbody.replaceChildren();
+  const f = r && FUND[r.ticker];
+  if (!f) return;
+  const ts = Date.parse(r.start_date), tp = Date.parse(r.peak_date);
+  const cell = (tr, text, num) => { const td = document.createElement("td"); td.textContent = text; if (num) td.className = "num"; tr.appendChild(td); return td; };
+  for (let i = f.a.length - 1; i >= 0; i--) {
+    const tr = document.createElement("tr");
+    const ta = f.a[i] * DAY;
+    if (ta >= ts && ta <= tp) tr.className = "inrun";
+    cell(tr, fmtDate(f.pe[i] * DAY));
+    cell(tr, fmtDate(ta) + (f.src[i] === "8-K" ? "" : " *"));
+    cell(tr, fmtMoney(f.revenue[i]), true);
+    const yoy = cell(tr, fmtPct(f.revenue_yoy_pct[i]), true);
+    if (f.revenue_yoy_pct[i] != null) yoy.classList.add(f.revenue_yoy_pct[i] >= 0 ? "up" : "down");
+    cell(tr, fmtEps(f.eps[i]), true);
+    cell(tr, fmtMoney(f.net_income[i]), true);
+    const docs = cell(tr, "");
+    const link = f.links?.[i] || {};
+    for (const [key, label] of [["release", "Press release"], ["commentary", "Commentary"], ["filing", "Filing"]]) {
+      if (!link[key]) continue;
+      const a = document.createElement("a");
+      a.href = link[key]; a.target = "_blank"; a.rel = "noopener"; a.textContent = label;
+      docs.appendChild(a);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+document.querySelectorAll("#fund-metric button").forEach(btn => btn.addEventListener("click", () => {
+  fundMetric = btn.dataset.k;
+  document.querySelectorAll("#fund-metric button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  renderFund(rows.find(x => x.ticker === selected));
+}));
+
+// ---------- table ----------
+const COLS = [
+  ["ticker", "Ticker", "str"], ["name", "Name", "str"], ["multiple", "Peak ×", "num", fmtX],
+  ["start_date", "Start", "str"], ["peak_date", "Peak", "str"], ["trading_days_to_peak", "Days", "num", v => v],
+  ["current_multiple", "Today ×", "num", fmtX], ["last_vs_peak_pct", "Now vs peak", "num", fmtPct],
+];
+if (rows.some(r => r.sector)) COLS.push(["sector", "Sector", "str"], ["market_cap", "Mkt cap", "num", fmtCap]);
+const hasScores = rows.some(r => r.nemotron_score != null);
+if (hasScores) COLS.push(["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v]);
+let sortKey = "multiple", sortDir = -1;
+
+function renderTable() {
+  const thead = document.querySelector("#table thead"), tbody = document.querySelector("#table tbody");
+  const hr = document.createElement("tr");
+  for (const [key, label, kind] of COLS) {
+    const th = document.createElement("th");
+    th.textContent = label + (key === sortKey ? (sortDir < 0 ? " ↓" : " ↑") : "");
+    if (kind === "num") th.className = "num";
+    th.addEventListener("click", () => { sortDir = key === sortKey ? -sortDir : (kind === "num" ? -1 : 1); sortKey = key; renderTable(); });
+    hr.appendChild(th);
+  }
+  thead.replaceChildren(hr);
+  const list = rows.filter(matches).sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey];
+    if (x == null) return 1; if (y == null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sortDir;
+  });
+  tbody.replaceChildren();
+  for (const r of list) {
+    const tr = document.createElement("tr");
+    if (r.ticker === selected) tr.className = "sel";
+    for (const [key, , kind, fmt] of COLS) {
+      const td = document.createElement("td");
+      const v = r[key];
+      td.textContent = fmt ? fmt(v) : (v ?? "–");
+      if (kind === "num") td.className = "num";
+      if (key === "name") td.className = "name";
+      if (key === "ticker") td.style.fontWeight = "600";
+      if (key === "current_multiple" && v != null) td.classList.add(v >= 1 ? "up" : "down");
+      if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
+      tr.appendChild(td);
+    }
+    tr.addEventListener("click", () => select(r.ticker, false));
+    tbody.appendChild(tr);
+  }
+  document.getElementById("count").textContent = `${list.length} of ${rows.length} shown`;
+}
+
+function select(ticker, scrollTable) {
+  selected = ticker;
+  renderScatter(); renderDetail(); renderTable();
+  if (scrollTable) document.querySelector("#table tr.sel")?.scrollIntoView({ block: "nearest" });
+}
+
+document.getElementById("search").addEventListener("input", e => {
+  filterText = e.target.value.trim().toLowerCase();
+  renderScatter(); renderTable();
+});
+let lastWidth = 0, resizeTimer;
+new ResizeObserver(entries => {
+  const w = Math.round(entries[0].contentRect.width);
+  if (w === lastWidth) return;
+  lastWidth = w;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { renderScatter(); renderDetail(); }, 60);
+}).observe(document.getElementById("scatter"));
+
+renderHeader(); renderScatter(); renderDetail(); renderTable();
+</script>
+</body>
+</html>
