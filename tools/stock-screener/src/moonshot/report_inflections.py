@@ -13,6 +13,10 @@ from .report import _fundamentals_payload, _weekly_series
 
 TEMPLATE = Path(__file__).with_name("inflections_template.html")
 
+# multi-agent-trading-desk/data/earnings_call_scores, from
+# multi-agent-trading-desk/tools/stock-screener/src/moonshot/report_inflections.py
+DEFAULT_MOONSHOT_DIR = Path(__file__).resolve().parents[4] / "data" / "earnings_call_scores"
+
 
 def _merge_scores(df: pd.DataFrame, scores_csv: Path | None) -> pd.DataFrame:
     if not scores_csv or not scores_csv.exists():
@@ -24,9 +28,41 @@ def _merge_scores(df: pd.DataFrame, scores_csv: Path | None) -> pd.DataFrame:
     return df.merge(scores, on="ticker", how="left")
 
 
+def _moonshot_payload(tickers: list[str], moonshot_dir: Path) -> dict:
+    """Per-quarter rows from the earnings-call moonshot pipeline (multi-agent-trading-desk),
+    keyed by ticker: [quarter, proximity, momentum, ambition, runway, tier, stage, one_line].
+
+    Separate from the `nemotron_score`/`nemotron_rationale` columns above, which come from
+    `moonshot rate` in this project and score fundamentals only, with no stage or rationale text.
+    """
+    out = {}
+    if not moonshot_dir.exists():
+        return out
+    for t in tickers:
+        path = moonshot_dir / f"{t}_moonshot_v3.jsonl"
+        if not path.exists():
+            continue
+        rows = []
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            tier = (r.get("proximity_tier") or "").split("_")[0] or "?"
+            rows.append([r["quarter"], r["proximity"], r["momentum"], r["ambition"], r["runway"],
+                         tier, r["stage"], r.get("one_line", "")])
+        if rows:
+            rows.sort(key=lambda row: (int(row[0][:4]), int(row[0][5])))
+            out[t] = rows
+    if out:
+        print(f"Merging moonshot pipeline data for {len(out)} of {len(tickers)} tickers from {moonshot_dir}",
+              file=sys.stderr)
+    return out
+
+
 def build_inflections_report(
     crossings_csv: Path | None, failures_csv: Path | None, data_dir: Path, out: Path,
     crossings_scores: Path | None = None, failures_scores: Path | None = None,
+    moonshot_dir: Path | None = None,
 ) -> Path:
     crossings = pd.DataFrame()
     failures = pd.DataFrame()
@@ -44,12 +80,14 @@ def build_inflections_report(
             series[t] = s
             since[t] = pd.Timestamp("1970-01-01") + pd.Timedelta(days=s["d"][0])
     fund = _fundamentals_payload(all_tickers, data_dir, since)
+    moonshot = _moonshot_payload(all_tickers, moonshot_dir or DEFAULT_MOONSHOT_DIR)
 
     payload = {
         "crossings": json.loads(crossings.to_json(orient="records")),
         "failures": json.loads(failures.to_json(orient="records")),
         "series": series,
         "fundamentals": fund,
+        "moonshot": moonshot,
         "generated": f"{dt.date.today():%Y-%m-%d}",
     }
     data = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")

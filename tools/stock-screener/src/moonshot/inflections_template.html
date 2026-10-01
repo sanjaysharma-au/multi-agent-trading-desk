@@ -90,6 +90,10 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: va
 .score-badge.up { color: var(--up); background: var(--up-bg); }
 .score-badge.down { color: var(--down); background: var(--down-bg); }
 .score-rationale { font-style: italic; }
+.moonshot-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--series-2); color: var(--series-2); background: rgba(235,104,52,0.08); white-space: nowrap; }
+.moonshot-trend { display: flex; gap: 3px; align-items: center; margin: 4px 0 2px; }
+.moonshot-trend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.moonshot-trend .q { color: var(--muted); font-size: 11px; margin-left: 6px; }
 .fund-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
 .fund-head h3 { font-size: 13px; margin: 0; }
 .qwrap { overflow: auto; max-height: 260px; margin-top: 10px; border-top: 1px solid var(--grid); }
@@ -115,9 +119,14 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: va
   <div class="card">
     <div class="detail-head">
       <h2 id="detail-title">Price history</h2>
-      <div class="score-badge" id="score-badge" hidden></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="score-badge" id="score-badge" hidden></div>
+        <div class="moonshot-badge" id="moonshot-badge" hidden></div>
+      </div>
     </div>
     <p class="note score-rationale" id="score-rationale" hidden></p>
+    <div class="moonshot-trend" id="moonshot-trend" hidden></div>
+    <p class="note score-rationale" id="moonshot-rationale" hidden></p>
     <p class="note" id="detail-note">Adjusted close, weekly, log scale. Ticks on the baseline mark earnings announcements.</p>
     <div class="legend" id="detail-legend"><span><i style="background:var(--series-1)"></i>Adjusted close</span></div>
     <div class="plot" id="detail"></div>
@@ -155,6 +164,19 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: va
 const DATA = /*DATA*/null;
 const LISTS = { crossings: DATA.crossings || [], failures: DATA.failures || [] };
 const series = DATA.series || {}, FUND = DATA.fundamentals || {};
+const MOONSHOT = DATA.moonshot || {};
+// Merge the latest moonshot-pipeline quarter onto each row so the existing sort/filter/table
+// code (which reads flat row properties) picks it up without special-casing.
+for (const list of [LISTS.crossings, LISTS.failures]) {
+  for (const r of list) {
+    const rows = MOONSHOT[r.ticker];
+    if (!rows || !rows.length) continue;
+    const last = rows[rows.length - 1];
+    [r.moonshot_quarter, r.moonshot_proximity, r.moonshot_momentum, r.moonshot_ambition,
+     r.moonshot_runway, r.moonshot_tier, r.moonshot_stage, r.moonshot_rationale] = last;
+  }
+}
+const tierColor = t => ({ T4: "var(--up)", T3: "var(--select)" }[t] || "var(--muted)");
 const DAY = 86400000;
 const NS = "http://www.w3.org/2000/svg";
 let activeTab = "crossings";
@@ -263,6 +285,29 @@ function renderScoreBadge(r) {
   else note.hidden = true;
 }
 
+// ---------- moonshot pipeline badge: stage, proximity/momentum, rationale, per-quarter trend ----------
+function renderMoonshotBadge(r) {
+  const badge = document.getElementById("moonshot-badge"), note = document.getElementById("moonshot-rationale");
+  const trend = document.getElementById("moonshot-trend");
+  const rows = r && MOONSHOT[r.ticker];
+  if (!rows || !rows.length) { badge.hidden = true; note.hidden = true; trend.hidden = true; return; }
+  const [q, prox, mom, , , tier, stage, rationale] = rows[rows.length - 1];
+  badge.hidden = false;
+  badge.textContent = `Moonshot ${tier} · ${stage.replace(/_/g, " ")} · proximity ${prox} · momentum ${mom > 0 ? "+" : ""}${mom} (${q})`;
+  if (rationale) { note.hidden = false; note.textContent = rationale; } else note.hidden = true;
+  trend.hidden = false;
+  trend.replaceChildren();
+  for (const row of rows) {
+    const i = document.createElement("i");
+    i.style.background = tierColor(row[5]);
+    i.title = `${row[0]}: ${row[5]} · ${row[6].replace(/_/g, " ")} · proximity ${row[1]}`;
+    trend.appendChild(i);
+  }
+  const lbl = document.createElement("span"); lbl.className = "q";
+  lbl.textContent = `${rows.length} quarter${rows.length === 1 ? "" : "s"}, earnings-call pipeline`;
+  trend.appendChild(lbl);
+}
+
 // ---------- price + fundamentals detail (shared across both tabs) ----------
 function renderDetail() {
   const plot = document.getElementById("detail");
@@ -270,10 +315,11 @@ function renderDetail() {
   const r = selected ? findRow(selected) : null;
   const title = document.getElementById("detail-title");
   const legend = document.getElementById("detail-legend");
-  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); renderFund(null); renderQuarterTable(null); return; }
+  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); renderMoonshotBadge(null); renderFund(null); renderQuarterTable(null); return; }
   const kind = rowKind(r.ticker);
   title.textContent = `${r.ticker}${r.name ? " · " + r.name : ""}`;
   renderScoreBadge(r);
+  renderMoonshotBadge(r);
   const s = series[r.ticker];
   const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
@@ -452,6 +498,8 @@ const COLS = {
     ["quarters_of_prior_history", "Prior history", "num", v => v], ["wobble_quarters", "Wobbles", "num", v => v],
     ["latest_revenue", "Latest revenue", "num", fmtMoney], ["latest_net_income", "Latest net income", "num", fmtMoney],
     ["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+    ["moonshot_tier", "Moonshot tier", "str", v => v ?? "–"],
+    ["moonshot_proximity", "Moonshot prox.", "num", v => v == null ? "–" : v],
   ],
   failures: [
     ["ticker", "Ticker", "str"], ["name", "Name", "str"],
@@ -460,6 +508,8 @@ const COLS = {
     ["revenue_to_burn_ratio", "Revenue/burn", "num", fmtRatio],
     ["latest_net_income", "Latest net income", "num", fmtMoney],
     ["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+    ["moonshot_tier", "Moonshot tier", "str", v => v ?? "–"],
+    ["moonshot_proximity", "Moonshot prox.", "num", v => v == null ? "–" : v],
   ],
 };
 const TABLE_NOTES = {
@@ -509,6 +559,7 @@ function renderTable() {
       if (key === "name") td.className = "name";
       if (key === "ticker") td.style.fontWeight = "600";
       if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
+      if ((key === "moonshot_tier" || key === "moonshot_proximity") && v != null) td.title = r.moonshot_rationale || "";
       if (key === "revenue_to_burn_ratio" && v != null) td.classList.add("down");
       tr.appendChild(td);
     }

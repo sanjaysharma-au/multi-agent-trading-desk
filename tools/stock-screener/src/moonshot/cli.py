@@ -18,6 +18,9 @@ from .report_inflections import build_inflections_report
 from .multibagger import find_best_run, parse_period
 from .prices import iter_prices
 from .report import build_report, latest_csv
+
+# tools/stock-screener/data, regardless of the working directory a command is run from.
+DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 from .scoring import DEFAULT_MODEL, Checkpoint, load_api_key, run as run_scoring, status_lines, write_scores_csv
 from .universe import load_universe
 
@@ -40,7 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--limit", type=int, help="only scan the first N universe tickers")
     scan.add_argument("--enrich", action="store_true", help="add sector/industry/market cap for hits")
     scan.add_argument("--max-age", type=float, default=1, help="cache max age in days (default 1)")
-    scan.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
+    scan.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
     scan.add_argument("--out", type=Path, help="output CSV (default results/multibaggers_<date>.csv)")
     scan.add_argument("--top", type=int, default=25, help="rows to print (default 25)")
     scan.add_argument("--report", action="store_true", help="also build the HTML report and open it")
@@ -48,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="build an interactive HTML report from a scan CSV")
     report.add_argument("csv", nargs="?", type=Path, help="scan CSV (default: latest results/multibaggers_*.csv)")
     report.add_argument("--multiple", type=float, default=5.0, help="threshold used in the scan (default 5)")
-    report.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
+    report.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
     report.add_argument("--out", type=Path, help="output HTML (default: CSV path with .html)")
     report.add_argument("--no-open", action="store_true", help="don't open the report in a browser")
     report.add_argument("--fundamentals-top", type=int, default=100,
@@ -62,7 +65,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rate.add_argument("--top", type=int, default=100, help="score the top N rows by multiple (default 100)")
     rate.add_argument("--model", default=DEFAULT_MODEL, help=f"NVIDIA API model id (default {DEFAULT_MODEL})")
     rate.add_argument("--api-key", help="NVIDIA API key (default: $NEMOTRON_API_KEY / $NVIDIA_API_KEY / .env)")
-    rate.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
+    rate.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
     rate.add_argument("--checkpoint", type=Path, help="checkpoint file (default data/scores/<csv-stem>.json)")
     rate.add_argument("--releases", type=int, default=4, help="recent press releases to include per ticker (default 4)")
     rate.add_argument("--max-attempts", type=int, default=5,
@@ -96,7 +99,7 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="cumulative revenue / cumulative losses must stay below this (default 0.1)")
     inflect.add_argument("--max-age", type=float, default=1, help="universe cache max age in days (default 1)")
     inflect.add_argument("--sec-max-age", type=float, default=7, help="SEC data cache max age in days (default 7)")
-    inflect.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
+    inflect.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
     inflect.add_argument("--out", type=Path, help="output CSV (default results/inflections_<date>.csv)")
     inflect.add_argument("--top", type=int, default=25, help="rows to print (default 25)")
 
@@ -105,7 +108,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ireport.add_argument("--failures", type=Path, help="failures CSV (default: latest results/inflections_*_failures.csv)")
     ireport.add_argument("--crossings-scores", type=Path, help="`moonshot rate` output CSV for the crossings")
     ireport.add_argument("--failures-scores", type=Path, help="`moonshot rate` output CSV for the failures")
-    ireport.add_argument("--data-dir", type=Path, default=Path("data"), help="cache directory (default data/)")
+    ireport.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
+    ireport.add_argument("--moonshot-dir", type=Path,
+                          help="earnings-call moonshot pipeline scores dir "
+                               "(default: ../../data/earnings_call_scores, i.e. multi-agent-trading-desk/data/earnings_call_scores)")
     ireport.add_argument("--out", type=Path, default=Path("results/inflections_report.html"), help="output HTML")
     ireport.add_argument("--no-open", action="store_true", help="don't open the report in a browser")
     return parser
@@ -318,7 +324,7 @@ def inflect_report(args: argparse.Namespace) -> int:
     print(f"Using crossings: {crossings or '(none)'}", file=sys.stderr)
     print(f"Using failures: {failures or '(none)'}", file=sys.stderr)
     path = build_inflections_report(crossings, failures, args.data_dir, args.out,
-                                    args.crossings_scores, args.failures_scores)
+                                    args.crossings_scores, args.failures_scores, args.moonshot_dir)
     print(f"Report written to {path}", file=sys.stderr)
     if not args.no_open:
         webbrowser.open(path.resolve().as_uri())
