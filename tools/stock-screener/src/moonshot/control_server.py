@@ -41,6 +41,7 @@ LOG_TAIL_CHARS = 4000
 CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache"
 CACHE_HTML = CACHE_DIR / "live_report.html"
 CACHE_MANIFEST = CACHE_DIR / "live_report.manifest.json"
+PID_FILE = CACHE_DIR / "serve.pid"
 _FINGERPRINT_SOURCE_FILES = [
     Path(__file__), Path(__file__).with_name("cli.py"), Path(__file__).with_name("report.py"),
     Path(__file__).with_name("report_inflections.py"), Path(__file__).with_name("inflections_template.html"),
@@ -68,16 +69,14 @@ BACKEND_ARGS = {
     "claude": ["--backend", "claude", "--model", "sonnet", "--ledger-backend", "claude", "--ledger-model", "sonnet"],
 }
 
-CHAT_SYSTEM_PROMPT = """You are a research analyst helping someone understand a specific stock, inside a \
-stock-screener tool. You are given below the ticker's fundamentals-crossing data and the earnings-call \
-moonshot pipeline's per-quarter scores (proximity, momentum, ambition, runway, tier, stage) with the \
-scorer's own one-line rationale for each quarter. Both are blind to price and to how the story turned out.
-
-Answer only from this context and clearly-labeled general knowledge; say so when you are not sure. Keep \
-answers short and direct - a few sentences unless the question asks for more. Do not fetch anything, run \
-any tool, or make up figures not in the context or your knowledge."""
-
-CLAUDE_CHAT_TIMEOUT_SECONDS = 120
+CHAT_SYSTEM_PROMPT = (
+    "You are a stock analyst. Use the data given below about this ticker, and search the web for "
+    "anything else you need - price, market cap, news, whatever the question calls for. Answers are "
+    "shown as plain text with no link rendering, so give the answer itself and leave out source lists, "
+    "citations, and URLs."
+)
+CHAT_ALLOWED_TOOLS = ["WebSearch", "WebFetch"]
+CLAUDE_CHAT_TIMEOUT_SECONDS = 180
 
 
 def _build_ticker_context(ticker: str, crossings_csv: Path | None, failures_csv: Path | None,
@@ -142,6 +141,7 @@ class ChatStore:
             (context_fn(ticker) + "\n\nQuestion: " + question) if session_id is None else question,
             "--output-format", "json",
             "--restricted", "--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit",
+            "--allowedTools", *CHAT_ALLOWED_TOOLS,
             "--permission-prompts", "none",
         ]
         if session_id is None:
@@ -411,11 +411,21 @@ def run_server(
     print(f"Pipeline: {PIPELINE}", file=sys.stderr)
     print(f"Python:   {PY}", file=sys.stderr)
     print(f"Moonshot scores read from: {moonshot_dir}", file=sys.stderr)
+    print(f"Stop it with: moonshot stop  (pid {os.getpid()})", file=sys.stderr)
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()))
+
+    def _on_sigterm(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     if open_browser:
         threading.Timer(0.3, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         pass
     finally:
         httpd.server_close()
+        PID_FILE.unlink(missing_ok=True)

@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import os
 import re
+import signal
 import sys
+import time
 import webbrowser
 from pathlib import Path
 
@@ -133,6 +136,9 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--no-open", action="store_true", help="don't open the page in a browser")
     serve.add_argument("--rebuild", action="store_true",
                         help="skip the build cache and rebuild the page from scratch even if nothing looks changed")
+
+    sub.add_parser("stop", help="stop a `moonshot serve` running in the background (does not touch "
+                                 "any earnings-call pipeline jobs it started - those are independent processes)")
     return parser
 
 
@@ -374,6 +380,39 @@ def serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def stop_server(args: argparse.Namespace) -> int:
+    from .control_server import PID_FILE
+
+    if not PID_FILE.exists():
+        print("No `moonshot serve` appears to be running (no PID file found).", file=sys.stderr)
+        return 1
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except ValueError:
+        PID_FILE.unlink(missing_ok=True)
+        print("PID file was invalid; removed it. Nothing to stop.", file=sys.stderr)
+        return 1
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        PID_FILE.unlink(missing_ok=True)
+        print(f"No process is running at pid {pid} (stale PID file removed). Nothing to stop.", file=sys.stderr)
+        return 1
+
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(30):
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            print(f"Stopped `moonshot serve` (was pid {pid}). Any earnings-call pipeline jobs it started "
+                  "keep running independently.", file=sys.stderr)
+            return 0
+    print(f"Sent stop signal to pid {pid}, but it is still running after 3s.", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     args = _build_parser().parse_args(argv)
@@ -389,6 +428,8 @@ def main(argv: list[str] | None = None) -> int:
         return inflect_report(args)
     if args.command == "serve":
         return serve(args)
+    if args.command == "stop":
+        return stop_server(args)
     return 1
 
 
