@@ -43,7 +43,14 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 48px; }
+.page { max-width: 1620px; margin: 0 auto; padding: 24px 16px 48px; display: flex; gap: 24px; align-items: flex-start; }
+main { max-width: 1240px; margin: 0; padding: 0; flex: 1 1 auto; min-width: 0; }
+aside#chat-card { flex: 0 0 380px; width: 380px; margin: 0; position: sticky; top: 24px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+aside#chat-card .chat-log { flex: 1 1 auto; max-height: none; min-height: 0; }
+@media (max-width: 1100px) {
+  .page { flex-direction: column; }
+  aside#chat-card { width: 100%; flex: none; position: static; max-height: none; }
+}
 h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 15px; margin: 0 0 2px; }
 .sub { color: var(--ink-2); margin: 0 0 20px; }
@@ -139,6 +146,7 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
 </style>
 </head>
 <body>
+<div class="page">
 <main>
   <h1>Inflections Report</h1>
   <p class="sub" id="sub"></p>
@@ -195,19 +203,6 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
     </tr></thead><tbody></tbody></table></div>
   </div>
 
-  <div class="card" id="chat-card" hidden>
-    <div class="detail-head">
-      <h2 id="chat-title">Ask about this stock</h2>
-      <button type="button" class="export" id="chat-reset">New conversation</button>
-    </div>
-    <p class="note">Answers come from Claude, given this ticker's fundamentals-crossing data and moonshot pipeline scores above, plus general knowledge. Not investment advice.</p>
-    <div class="chat-log" id="chat-log"></div>
-    <form class="chat-form" id="chat-form">
-      <input type="text" id="chat-input" placeholder="Ask a question about this stock…" autocomplete="off">
-      <button type="submit" id="chat-send">Send</button>
-    </form>
-  </div>
-
   <div class="tabs" id="tabs">
     <button data-t="crossings" aria-pressed="true">Crossings <span class="n" id="n-crossings"></span></button>
     <button data-t="failures" aria-pressed="false">Failures <span class="n" id="n-failures"></span></button>
@@ -222,6 +217,20 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
     <div class="tablewrap"><table id="table"><thead></thead><tbody></tbody></table></div>
   </section>
 </main>
+
+<aside class="card" id="chat-card" hidden>
+  <div class="detail-head">
+    <h2 id="chat-title">Ask about this stock</h2>
+    <button type="button" class="export" id="chat-reset">New conversation</button>
+  </div>
+  <p class="note">Answers come from Claude, given this ticker's fundamentals-crossing data and moonshot pipeline scores above, plus general knowledge and a web search. Not investment advice.</p>
+  <div class="chat-log" id="chat-log"></div>
+  <form class="chat-form" id="chat-form">
+    <input type="text" id="chat-input" placeholder="Ask a question about this stock…" autocomplete="off">
+    <button type="submit" id="chat-send">Send</button>
+  </form>
+</aside>
+</div>
 <script>
 const DATA = /*DATA*/null;
 const LISTS = { crossings: DATA.crossings || [], failures: DATA.failures || [] };
