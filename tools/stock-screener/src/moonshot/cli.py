@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import re
 import sys
 import webbrowser
 from pathlib import Path
@@ -19,8 +20,9 @@ from .multibagger import find_best_run, parse_period
 from .prices import iter_prices
 from .report import build_report, latest_csv
 
-# tools/stock-screener/data, regardless of the working directory a command is run from.
+# tools/stock-screener/{data,results}, regardless of the working directory a command is run from.
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DEFAULT_RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
 from .scoring import DEFAULT_MODEL, Checkpoint, load_api_key, run as run_scoring, status_lines, write_scores_csv
 from .universe import load_universe
 
@@ -112,8 +114,25 @@ def _build_parser() -> argparse.ArgumentParser:
     ireport.add_argument("--moonshot-dir", type=Path,
                           help="earnings-call moonshot pipeline scores dir "
                                "(default: ../../data/earnings_call_scores, i.e. multi-agent-trading-desk/data/earnings_call_scores)")
-    ireport.add_argument("--out", type=Path, default=Path("results/inflections_report.html"), help="output HTML")
+    ireport.add_argument("--out", type=Path, default=DEFAULT_RESULTS_DIR / "inflections_report.html", help="output HTML")
     ireport.add_argument("--no-open", action="store_true", help="don't open the report in a browser")
+
+    serve = sub.add_parser(
+        "serve", help="serve the inflections report live, with per-row buttons to start/stop "
+                       "the earnings-call moonshot pipeline and watch it run"
+    )
+    serve.add_argument("--crossings", type=Path, help="crossings CSV (default: latest results/inflections_*.csv, excluding _failures)")
+    serve.add_argument("--failures", type=Path, help="failures CSV (default: latest results/inflections_*_failures.csv)")
+    serve.add_argument("--crossings-scores", type=Path, help="`moonshot rate` output CSV for the crossings")
+    serve.add_argument("--failures-scores", type=Path, help="`moonshot rate` output CSV for the failures")
+    serve.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
+    serve.add_argument("--moonshot-dir", type=Path,
+                        help="earnings-call moonshot pipeline scores dir (default: multi-agent-trading-desk/data/earnings_call_scores)")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--no-open", action="store_true", help="don't open the page in a browser")
+    serve.add_argument("--rebuild", action="store_true",
+                        help="skip the build cache and rebuild the page from scratch even if nothing looks changed")
     return parser
 
 
@@ -156,7 +175,7 @@ def scan(args: argparse.Namespace) -> int:
         extra = pd.DataFrame([enrich(t) for t in result["ticker"]])
         result = pd.concat([result, extra], axis=1)
 
-    out = args.out or Path("results") / f"multibaggers_{dt.date.today():%Y%m%d}.csv"
+    out = args.out or DEFAULT_RESULTS_DIR / f"multibaggers_{dt.date.today():%Y%m%d}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(out, index=False)
 
@@ -179,7 +198,7 @@ def _write_report(csv: Path, data_dir: Path, multiple: float, out: Path, open_br
 
 
 def report(args: argparse.Namespace) -> int:
-    csv = args.csv or latest_csv(Path("results"))
+    csv = args.csv or latest_csv(DEFAULT_RESULTS_DIR)
     if not csv or not csv.exists():
         print("No scan CSV found; run `moonshot scan` first or pass a CSV path.", file=sys.stderr)
         return 1
@@ -196,7 +215,7 @@ def _row_tickers(df: pd.DataFrame) -> list[tuple[str, str | None, str | None, st
 
 
 def rate(args: argparse.Namespace) -> int:
-    csv = args.csv or latest_csv(Path("results"))
+    csv = args.csv or latest_csv(DEFAULT_RESULTS_DIR)
     if not csv or not csv.exists():
         print("No scan CSV found; run `moonshot scan` first or pass a CSV path.", file=sys.stderr)
         return 1
@@ -227,7 +246,7 @@ def rate(args: argparse.Namespace) -> int:
     run_scoring(tickers, args.data_dir / "sec", checkpoint, api_key, args.model, args.max_attempts,
                args.releases, args.sleep, args.api_retries, log_line=lambda s: print(s, file=sys.stderr))
 
-    out = args.out or Path("results") / f"{csv.stem}_scores.csv"
+    out = args.out or DEFAULT_RESULTS_DIR / f"{csv.stem}_scores.csv"
     n = write_scores_csv(checkpoint, out)
     print(f"\n{n} scores written to {out}" if n else "\nNo scores to write yet.", file=sys.stderr)
     for line in status_lines(tickers, checkpoint):
@@ -278,7 +297,7 @@ def inflect(args: argparse.Namespace) -> int:
 
     stem = f"inflections_{dt.date.today():%Y%m%d}"
     if do_crossing:
-        _write_inflection_csv(crossings, "quarters_since_crossing", args.out or Path("results") / f"{stem}.csv",
+        _write_inflection_csv(crossings, "quarters_since_crossing", args.out or DEFAULT_RESULTS_DIR / f"{stem}.csv",
                               ["ticker", "crossing_period_end", "quarters_since_crossing",
                                "quarters_of_prior_history", "wobble_quarters", "latest_revenue",
                                "latest_net_income", "latest_free_cash_flow"],
@@ -286,7 +305,7 @@ def inflect(args: argparse.Namespace) -> int:
     if do_failure:
         # In --mode both, crossings and failures have different schemas and can't share one file,
         # so --out (if given) applies only when failure is the sole mode being run.
-        failure_out = args.out if args.mode == "failure" and args.out else Path("results") / f"{stem}_failures.csv"
+        failure_out = args.out if args.mode == "failure" and args.out else DEFAULT_RESULTS_DIR / f"{stem}_failures.csv"
         _write_inflection_csv(failures, "revenue_to_burn_ratio", failure_out,
                               ["ticker", "quarters_of_history", "quarters_with_revenue",
                                "cumulative_revenue", "cumulative_losses", "revenue_to_burn_ratio",
@@ -308,9 +327,16 @@ def _write_inflection_csv(rows: list[dict], sort_key: str, out: Path, cols: list
     print(f"{len(result)} {label} written to {out}", file=sys.stderr)
 
 
+# Only the exact filenames `_write_inflection_csv` writes (inflections_YYYYMMDD[.csv] and
+# inflections_YYYYMMDD_failures.csv) - not `_scores`, `_sorted`, `_full`, `_new_crossings` and
+# other derived files that also start with "inflections_" and sort newer by mtime.
+_INFLECTIONS_STEM_RE = re.compile(r"^inflections_\d{8}(_failures)?$")
+
+
 def _latest_inflections_csv(want_failures: bool) -> Path | None:
-    files = sorted(Path("results").glob("inflections_*.csv"), key=lambda p: p.stat().st_mtime)
-    files = [f for f in files if ("_failures" in f.stem) == want_failures]
+    files = [f for f in DEFAULT_RESULTS_DIR.glob("inflections_*.csv")
+             if (m := _INFLECTIONS_STEM_RE.match(f.stem)) and bool(m.group(1)) == want_failures]
+    files.sort(key=lambda p: p.stat().st_mtime)
     return files[-1] if files else None
 
 
@@ -331,6 +357,23 @@ def inflect_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def serve(args: argparse.Namespace) -> int:
+    from .control_server import DEFAULT_MOONSHOT_DIR, run_server
+
+    crossings = args.crossings or _latest_inflections_csv(want_failures=False)
+    failures = args.failures or _latest_inflections_csv(want_failures=True)
+    if not crossings and not failures:
+        print("No inflections CSV found; run `moonshot inflect` first, or pass --crossings/--failures.",
+              file=sys.stderr)
+        return 1
+    print(f"Using crossings: {crossings or '(none)'}", file=sys.stderr)
+    print(f"Using failures: {failures or '(none)'}", file=sys.stderr)
+    run_server(crossings, failures, args.data_dir, args.crossings_scores, args.failures_scores,
+               args.moonshot_dir or DEFAULT_MOONSHOT_DIR, args.host, args.port,
+               open_browser=not args.no_open, rebuild=args.rebuild)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     args = _build_parser().parse_args(argv)
@@ -344,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
         return inflect(args)
     if args.command == "inflect-report":
         return inflect_report(args)
+    if args.command == "serve":
+        return serve(args)
     return 1
 
 
