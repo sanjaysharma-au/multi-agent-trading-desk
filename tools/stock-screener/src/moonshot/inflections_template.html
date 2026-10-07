@@ -43,13 +43,19 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-.page { max-width: 1620px; margin: 0 auto; padding: 24px 16px 48px; display: flex; gap: 24px; align-items: flex-start; }
+.page { max-width: 1900px; margin: 0 auto; padding: 24px 16px 48px; display: flex; gap: 24px; align-items: flex-start; }
 main { max-width: 1240px; margin: 0; padding: 0; flex: 1 1 auto; min-width: 0; }
 aside#chat-card { flex: 0 0 380px; width: 380px; margin: 0; position: sticky; top: 24px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
 aside#chat-card .chat-log { flex: 1 1 auto; max-height: none; min-height: 0; }
-@media (max-width: 1100px) {
+aside#list-panel { flex: 0 0 340px; width: 340px; margin: 0; position: sticky; top: 24px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; order: -1; }
+aside#list-panel .tablewrap { flex: 1 1 auto; max-height: none; min-height: 0; }
+aside#list-panel .export { align-self: flex-start; margin-top: 10px; }
+aside#list-panel .toolbar input { min-width: 0; flex: 1; }
+aside#list-panel table th, aside#list-panel table td { padding: 5px 6px; font-size: 12px; }
+aside#list-panel td.name { max-width: none; }
+@media (max-width: 1500px) {
   .page { flex-direction: column; }
-  aside#chat-card { width: 100%; flex: none; position: static; max-height: none; }
+  aside#chat-card, aside#list-panel { width: 100%; flex: none; position: static; max-height: none; order: 0; }
 }
 h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 15px; margin: 0 0 2px; }
@@ -147,6 +153,19 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
 </head>
 <body>
 <div class="page">
+<aside class="card" id="list-panel">
+  <div class="tabs" id="tabs">
+    <button data-t="crossings" aria-pressed="true">Crossings <span class="n" id="n-crossings"></span></button>
+    <button data-t="failures" aria-pressed="false">Failures <span class="n" id="n-failures"></span></button>
+  </div>
+  <p class="note" id="table-note"></p>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Filter…" aria-label="Filter table">
+    <span class="count" id="count"></span>
+  </div>
+  <div class="tablewrap"><table id="table"><thead></thead><tbody></tbody></table></div>
+  <button class="export" id="export-csv" type="button">Export CSV</button>
+</aside>
 <main>
   <h1>Inflections Report</h1>
   <p class="sub" id="sub"></p>
@@ -203,19 +222,6 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
     </tr></thead><tbody></tbody></table></div>
   </div>
 
-  <div class="tabs" id="tabs">
-    <button data-t="crossings" aria-pressed="true">Crossings <span class="n" id="n-crossings"></span></button>
-    <button data-t="failures" aria-pressed="false">Failures <span class="n" id="n-failures"></span></button>
-  </div>
-  <section class="card">
-    <p class="note" id="table-note"></p>
-    <div class="toolbar">
-      <input id="search" type="search" placeholder="Filter by ticker or name…" aria-label="Filter table">
-      <span class="count" id="count"></span>
-      <button class="export" id="export-csv" type="button">Export CSV</button>
-    </div>
-    <div class="tablewrap"><table id="table"><thead></thead><tbody></tbody></table></div>
-  </section>
 </main>
 
 <aside class="card" id="chat-card" hidden>
@@ -763,29 +769,22 @@ document.querySelectorAll("#fund-metric button").forEach(btn => btn.addEventList
 }));
 
 // ---------- tables ----------
+const trimName = v => (v || "").length > 10 ? v.slice(0, 10) + "…" : (v || "–");
 const COLS = {
   crossings: [
-    ["ticker", "Ticker", "str"], ["name", "Name", "str"],
-    ["crossover_date", "Crossover Date", "str", v => v == null ? "–" : fmtDate(v)],
-    ["crossing_period_end", "Crossed", "str"], ["quarters_since_crossing", "Qtrs since", "num", v => v],
-    ["quarters_of_prior_history", "Prior history", "num", v => v], ["wobble_quarters", "Wobbles", "num", v => v],
-    ["latest_revenue", "Latest revenue", "num", fmtMoney], ["latest_net_income", "Latest net income", "num", fmtMoney],
-    ["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
-    ["moonshot_tier", "Moonshot tier", "str", v => v ?? "–"],
-    ["moonshot_proximity", "Moonshot prox.", "num", v => v == null ? "–" : v],
+    ["ticker", "Ticker", "str"], ["name", "Name", "str", trimName],
+    ["crossing_period_end", "Crossed", "str"],
+    ["nemotron_score", "Fund.", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+    ["moonshot_tier", "Tier", "str", v => v ?? "–"],
+    ["moonshot_proximity", "Prox.", "num", v => v == null ? "–" : v],
   ],
   failures: [
-    ["ticker", "Ticker", "str"], ["name", "Name", "str"],
-    ["quarters_of_history", "Quarters", "num", v => v], ["quarters_with_revenue", "With revenue", "num", v => v],
-    ["cumulative_revenue", "Lifetime revenue", "num", fmtMoney], ["cumulative_losses", "Lifetime losses", "num", fmtMoney],
-    ["revenue_to_burn_ratio", "Revenue/burn", "num", fmtRatio],
-    ["latest_net_income", "Latest net income", "num", fmtMoney],
-    ["nemotron_score", "Fund. score", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
-    ["moonshot_tier", "Moonshot tier", "str", v => v ?? "–"],
-    ["moonshot_proximity", "Moonshot prox.", "num", v => v == null ? "–" : v],
+    ["ticker", "Ticker", "str"], ["name", "Name", "str", trimName],
+    ["nemotron_score", "Fund.", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+    ["moonshot_tier", "Tier", "str", v => v ?? "–"],
+    ["moonshot_proximity", "Prox.", "num", v => v == null ? "–" : v],
   ],
 };
-if (LIVE) { COLS.crossings.splice(2, 0, ["ctl", "Analysis", "ctl"]); COLS.failures.splice(2, 0, ["ctl", "Analysis", "ctl"]); }
 const TABLE_NOTES = {
   crossings: "Sorted by how many quarters have passed since the crossing - fewer means more recent. A confirmed crossing needs at least 2 quarters of track record since.",
   failures: "Sorted by revenue-to-burn ratio, worst first. A low ratio alone doesn't distinguish a genuinely failing company from an early-stage business (e.g. a pre-revenue biotech) that simply hasn't launched yet - read the fundamentals score for that judgment.",
@@ -831,7 +830,7 @@ function renderTable() {
       const v = r[key];
       td.textContent = fmt ? fmt(v) : (v ?? "–");
       if (kind === "num") td.className = "num";
-      if (key === "name") td.className = "name";
+      if (key === "name") { td.className = "name"; td.title = v || ""; }
       if (key === "ticker") td.style.fontWeight = "600";
       if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
       if ((key === "moonshot_tier" || key === "moonshot_proximity") && v != null) td.title = r.moonshot_rationale || "";
