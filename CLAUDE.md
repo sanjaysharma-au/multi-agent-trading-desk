@@ -2,7 +2,8 @@
 
 ## Git
 
-- Stage changes with `git add` when asked to track/save files, but never run `git commit` — the user commits themselves.
+- Claude may run `git commit` when asked to commit.
+- Never reference Claude or AI involvement anywhere in committed material: no `Co-Authored-By` or "Generated with" lines in commit messages or PR descriptions, and no mentions in code comments.
 
 ## Code style
 
