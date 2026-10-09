@@ -44,7 +44,8 @@ CACHE_MANIFEST = CACHE_DIR / "live_report.manifest.json"
 PID_FILE = CACHE_DIR / "serve.pid"
 _FINGERPRINT_SOURCE_FILES = [
     Path(__file__), Path(__file__).with_name("cli.py"), Path(__file__).with_name("report.py"),
-    Path(__file__).with_name("report_inflections.py"), Path(__file__).with_name("inflections_template.html"),
+    Path(__file__).with_name("report_inflections.py"),
+    Path(__file__).with_name("sector.py"), Path(__file__).with_name("inflections_template.html"),
 ]
 
 

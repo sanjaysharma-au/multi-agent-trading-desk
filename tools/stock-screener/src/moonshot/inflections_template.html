@@ -774,6 +774,8 @@ const COLS = {
   crossings: [
     ["ticker", "Ticker", "str"], ["name", "Name", "str", trimName],
     ["crossing_period_end", "Crossed", "str"],
+    ["rise_since_crossing_pct", "Rise", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"],
+    ["rise_vs_sector_pct", "vs Sector", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"],
     ["nemotron_score", "Fund.", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
     ["moonshot_tier", "Tier", "str", v => v ?? "–"],
     ["moonshot_proximity", "Prox.", "num", v => v == null ? "–" : v],
@@ -786,10 +788,10 @@ const COLS = {
   ],
 };
 const TABLE_NOTES = {
-  crossings: "Sorted by how many quarters have passed since the crossing - fewer means more recent. A confirmed crossing needs at least 2 quarters of track record since.",
+  crossings: "Sorted by stock rise relative to its sector, smallest first. Rise is measured from the last weekly close before the crossing quarter's results were announced to the latest close; vs Sector compares that to the same-period rise of the sector ETF (hover the cell for the ETF). Pharma companies are excluded. A confirmed crossing needs at least 2 quarters of track record since.",
   failures: "Sorted by revenue-to-burn ratio, worst first. A low ratio alone doesn't distinguish a genuinely failing company from an early-stage business (e.g. a pre-revenue biotech) that simply hasn't launched yet - read the fundamentals score for that judgment.",
 };
-let sortKey = { crossings: "quarters_since_crossing", failures: "revenue_to_burn_ratio" };
+let sortKey = { crossings: "rise_vs_sector_pct", failures: "revenue_to_burn_ratio" };
 let sortDir = { crossings: 1, failures: 1 };
 let currentList = [];
 
@@ -834,6 +836,8 @@ function renderTable() {
       if (key === "ticker") td.style.fontWeight = "600";
       if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
       if ((key === "moonshot_tier" || key === "moonshot_proximity") && v != null) td.title = r.moonshot_rationale || "";
+      if (key === "rise_vs_sector_pct" && v != null) { td.classList.add(v >= 0 ? "up" : "down"); td.title = `Sector ${r.sector_etf}: ${r.sector_rise_pct > 0 ? "+" : ""}${Math.round(r.sector_rise_pct)}% over the same period`; }
+      if (key === "rise_since_crossing_pct" && v != null) { td.classList.add(v >= 0 ? "up" : "down"); td.title = "Stock change since the crossing quarter's results were announced"; }
       if (key === "revenue_to_burn_ratio" && v != null) td.classList.add("down");
       tr.appendChild(td);
     }

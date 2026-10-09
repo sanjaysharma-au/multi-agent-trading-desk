@@ -9,13 +9,65 @@ from pathlib import Path
 
 import pandas as pd
 
+from .fundamentals import cik_map
 from .report import _fundamentals_payload, _weekly_series
+from .sector import etf_for_sic, load_etf_series
 
 TEMPLATE = Path(__file__).with_name("inflections_template.html")
 
 # multi-agent-trading-desk/data/earnings_call_scores, from
 # multi-agent-trading-desk/tools/stock-screener/src/moonshot/report_inflections.py
 DEFAULT_MOONSHOT_DIR = Path(__file__).resolve().parents[4] / "data" / "earnings_call_scores"
+
+# SEC SIC industry group 283 (drugs: 2833-2836) plus 8731 (commercial biological research).
+PHARMA_SIC_PREFIXES = ("283", "8731")
+
+
+def _sic(ticker: str, sec_dir: Path, ciks: dict[str, int]) -> str:
+    path = sec_dir / f"sub_{ciks.get(ticker, 0)}.json"
+    if not path.exists():
+        return ""
+    return json.loads(path.read_text()).get("sic") or ""
+
+
+def _is_pharma(ticker: str, sec_dir: Path, ciks: dict[str, int]) -> bool:
+    return _sic(ticker, sec_dir, ciks).startswith(PHARMA_SIC_PREFIXES)
+
+
+def _drop_pharma(df: pd.DataFrame, sec_dir: Path) -> pd.DataFrame:
+    if df.empty:
+        return df
+    ciks = cik_map(sec_dir)
+    pharma = df["ticker"].map(lambda t: _is_pharma(t, sec_dir, ciks))
+    if pharma.any():
+        print(f"Dropping {int(pharma.sum())} pharma crossings: {', '.join(df.loc[pharma, 'ticker'])}",
+              file=sys.stderr)
+    return df[~pharma].reset_index(drop=True)
+
+
+def _known_day(crossing_period_end: str, fund: dict | None) -> int:
+    """Days since epoch when the market learned of the crossing: the results announcement date,
+    falling back to the quarter end if it is unknown."""
+    period_end = (pd.Timestamp(crossing_period_end) - pd.Timestamp("1970-01-01")).days
+    if fund and period_end in fund["pe"]:
+        return fund["a"][fund["pe"].index(period_end)]
+    return period_end
+
+
+def _rise_pct(series: dict | None, known_day: int) -> float | None:
+    """Percent change from the last weekly close before `known_day` to the latest close."""
+    if not series:
+        return None
+    before = [p for d, p in zip(series["d"], series["p"]) if d < known_day]
+    if not before or before[-1] <= 0:
+        return None
+    return round((series["p"][-1] / before[-1] - 1) * 100, 1)
+
+
+def _relative_pct(stock_rise: float | None, sector_rise: float | None) -> float | None:
+    if stock_rise is None or sector_rise is None:
+        return None
+    return round(((1 + stock_rise / 100) / (1 + sector_rise / 100) - 1) * 100, 1)
 
 
 def _merge_scores(df: pd.DataFrame, scores_csv: Path | None) -> pd.DataFrame:
@@ -59,6 +111,20 @@ def _moonshot_payload(tickers: list[str], moonshot_dir: Path) -> dict:
     return out
 
 
+def _add_rise_columns(crossings: pd.DataFrame, series: dict, fund: dict, data_dir: Path) -> None:
+    sec_dir, ciks = data_dir / "sec", cik_map(data_dir / "sec")
+    crossings["sector_etf"] = [etf_for_sic(_sic(t, sec_dir, ciks)) for t in crossings["ticker"]]
+    etf_series = {e: load_etf_series(e, data_dir / "sector") for e in sorted(set(crossings["sector_etf"]))}
+    rise, sector_rise = [], []
+    for r in crossings.itertuples():
+        known = _known_day(r.crossing_period_end, fund.get(r.ticker))
+        rise.append(_rise_pct(series.get(r.ticker), known))
+        sector_rise.append(_rise_pct(etf_series[r.sector_etf], known))
+    crossings["rise_since_crossing_pct"] = rise
+    crossings["sector_rise_pct"] = sector_rise
+    crossings["rise_vs_sector_pct"] = [_relative_pct(a, b) for a, b in zip(rise, sector_rise)]
+
+
 def build_inflections_report(
     crossings_csv: Path | None, failures_csv: Path | None, data_dir: Path, out: Path,
     crossings_scores: Path | None = None, failures_scores: Path | None = None,
@@ -67,7 +133,7 @@ def build_inflections_report(
     crossings = pd.DataFrame()
     failures = pd.DataFrame()
     if crossings_csv and crossings_csv.exists():
-        crossings = _merge_scores(pd.read_csv(crossings_csv), crossings_scores)
+        crossings = _merge_scores(_drop_pharma(pd.read_csv(crossings_csv), data_dir / "sec"), crossings_scores)
     if failures_csv and failures_csv.exists():
         failures = _merge_scores(pd.read_csv(failures_csv), failures_scores)
 
@@ -81,6 +147,8 @@ def build_inflections_report(
             since[t] = pd.Timestamp("1970-01-01") + pd.Timedelta(days=s["d"][0])
     fund = _fundamentals_payload(all_tickers, data_dir, since)
     moonshot = _moonshot_payload(all_tickers, moonshot_dir or DEFAULT_MOONSHOT_DIR)
+    if not crossings.empty:
+        _add_rise_columns(crossings, series, fund, data_dir)
 
     payload = {
         "crossings": json.loads(crossings.to_json(orient="records")),
