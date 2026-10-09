@@ -80,7 +80,7 @@ def build_facts(ticker: str, row: pd.Series, data_dir: Path) -> dict:
 
 def _prompt(facts: dict) -> str:
     schema = {
-        "summary": "2-4 sentences, plain text, on why the stock has lagged",
+        "summary": "2-4 sentences, plain text, on why the stock has moved as it has against its sector",
         "drivers": [{"category": f"one of {CATEGORIES}", "detail": "one sentence of evidence"}],
         "verdict": f"one of {VERDICTS}",
         "verdict_reason": "one sentence",
@@ -89,8 +89,9 @@ def _prompt(facts: dict) -> str:
     return (
         "Facts computed from SEC filings and price history (trust these):\n"
         f"{json.dumps(facts, indent=2)}\n\n"
-        "Question: since the results for the crossing quarter were announced, why has this stock lagged "
-        "its sector? Check, with web search: analyst commentary, guidance changes, slowing growth, "
+        "Question: since the results for the crossing quarter were announced, how has this stock performed "
+        "against its sector ETF, and why? If it has outperformed, say so and explain what drove it instead "
+        "of looking for reasons it lagged. Check, with web search: analyst commentary, guidance changes, slowing growth, "
         "AI-disruption concerns, sector-wide derating, rates and macro, insider or holder selling, "
         "dilution, and company-specific events. Verdict meanings: likely_deserved = the business "
         "deteriorated or the price was stretched; possibly_undervalued = business intact or improving "

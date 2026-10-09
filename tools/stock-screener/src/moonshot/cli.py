@@ -124,6 +124,9 @@ def _build_parser() -> argparse.ArgumentParser:
     val.add_argument("tickers", help="comma-separated tickers")
     val.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
 
+    queue = sub.add_parser("queue", help="print crossing tickers, most recent crossing first, pharma excluded")
+    queue.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
+
     why = sub.add_parser("why", help="web-research why a crossing stock has lagged since the crossing")
     why.add_argument("ticker")
     why.add_argument("--model", default="sonnet", help="claude model alias (default sonnet)")
@@ -434,6 +437,18 @@ def valuation(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def queue(args: argparse.Namespace) -> int:
+    from .report_inflections import _drop_pharma
+    path = _latest_inflections_csv(want_failures=False)
+    if path is None:
+        print("No inflections CSV found; run `moonshot inflect` first.", file=sys.stderr)
+        return 1
+    df = _drop_pharma(pd.read_csv(path), args.data_dir / "sec")
+    df = df.sort_values(["crossing_period_end", "ticker"], ascending=[False, True])
+    print("\n".join(df["ticker"]))
+    return 0
+
+
 def why(args: argparse.Namespace) -> int:
     from .research import run_research
     path = run_research(args.ticker, args.data_dir, DEFAULT_RESULTS_DIR, args.model)
@@ -456,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
         return inflect_report(args)
     if args.command == "valuation":
         return valuation(args)
+    if args.command == "queue":
+        return queue(args)
     if args.command == "why":
         return why(args)
     if args.command == "serve":

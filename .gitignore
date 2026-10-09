@@ -22,3 +22,5 @@ earnings_call_trajectory_v2/
 
 .claude/scheduled_tasks.lock
 .claude/settings.json
+
+logs/crossing_queue/

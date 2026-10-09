@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the moonshot pipeline for the next unfinished crossing
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
+ExecStart=@REPO@/.venv/bin/python @REPO@/src/research/run_next_crossing.py
+TimeoutStartSec=7h
