@@ -6,4 +6,4 @@ Type=oneshot
 WorkingDirectory=@REPO@
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
 ExecStart=@REPO@/.venv/bin/python @REPO@/src/research/run_next_crossing.py
-TimeoutStartSec=7h
+TimeoutStartSec=infinity

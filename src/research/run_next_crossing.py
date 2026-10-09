@@ -46,7 +46,9 @@ def pending(tickers: list[str], state: dict, max_attempts: int) -> list[str]:
             if not state.get(t, {}).get("complete") and state.get(t, {}).get("attempts", 0) < max_attempts]
 
 
-def run_ticker(ticker: str, state: dict, timeout_hours: float) -> None:
+def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
+    """Runs the pipeline for one ticker and returns how many seconds it took."""
+    started = time.monotonic()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"{ticker}_{datetime.now():%Y%m%d_%H%M%S}.log"
     entry = state.setdefault(ticker, {"attempts": 0})
@@ -65,8 +67,10 @@ def run_ticker(ticker: str, state: dict, timeout_hours: float) -> None:
     entry["last_exit"] = rc
     entry["complete"] = rc == 0 and is_complete(ticker)
     save_state(state)
-    print(f"{ticker}: {'complete' if entry['complete'] else f'incomplete (exit {rc}, attempt {entry['attempts']})'}",
-          flush=True)
+    elapsed = time.monotonic() - started
+    print(f"{ticker}: {'complete' if entry['complete'] else f'incomplete (exit {rc}, attempt {entry['attempts']})'} "
+          f"in {elapsed / 60:.1f} min", flush=True)
+    return elapsed
 
 
 def main() -> None:
@@ -77,6 +81,9 @@ def main() -> None:
     parser.add_argument("--max-attempts", type=int, default=2,
                         help="give up on a ticker after this many failed runs (default 2)")
     parser.add_argument("--timeout-hours", type=float, default=6.0, help="kill a single ticker's run after this long")
+    parser.add_argument("--fast-minutes", type=float, default=10.0,
+                        help="after a ticker completes in under this many minutes, run the next one straight away "
+                        "instead of waiting for the next timer (default 10; 0 disables)")
     parser.add_argument("--ticker", help="run this ticker instead of the next one in the queue")
     parser.add_argument("--list", action="store_true", help="print the pending queue and exit")
     parser.add_argument("--retry-failed", action="store_true", help="clear the attempt counters first")
@@ -108,7 +115,9 @@ def main() -> None:
                 state.setdefault(ticker, {"attempts": 0})["complete"] = True
                 save_state(state)
                 continue
-            run_ticker(ticker, state, args.timeout_hours)
+            elapsed = run_ticker(ticker, state, args.timeout_hours)
+            if state[ticker]["complete"] and elapsed < args.fast_minutes * 60:
+                continue
             return
         print("queue empty: every crossing is complete or out of attempts")
 
