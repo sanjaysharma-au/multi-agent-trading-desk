@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -29,6 +30,13 @@ SIC_TO_ETF = {
     "30": "XLY", "39": "XLY",
     "38": "XLV", "80": "XLV", "3841": "XLV", "3826": "XLK",
 }
+
+
+def sic_for_ticker(ticker: str, sec_dir: Path, ciks: dict[str, int]) -> str:
+    path = sec_dir / f"sub_{ciks.get(ticker, 0)}.json"
+    if not path.exists():
+        return ""
+    return json.loads(path.read_text()).get("sic") or ""
 
 
 def etf_for_sic(sic: str | None) -> str:

@@ -184,6 +184,7 @@ _PHASE_PATTERNS: list[tuple[re.Pattern, callable]] = [
     (re.compile(r"^\d+ complete calls found"), lambda m: "scoring transcripts"),
     (re.compile(r"^\[(\w+)\]\s+ambition=\d"), lambda m: f"scoring {m.group(1)}"),
     (re.compile(r"^\[(\w+)\]\s+\d+ of \d+ quarters have a press release"), lambda m: "fetching press releases"),
+    (re.compile(r"^=== (valuation|research):"), lambda m: "pricing history" if m.group(1) == "valuation" else "researching why it lags"),
     (re.compile(r"All steps complete"), lambda m: "wrapping up"),
 ]
 

@@ -120,6 +120,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ireport.add_argument("--out", type=Path, default=DEFAULT_RESULTS_DIR / "inflections_report.html", help="output HTML")
     ireport.add_argument("--no-open", action="store_true", help="don't open the report in a browser")
 
+    val = sub.add_parser("valuation", help="compute price-to-sales / price-to-FCF history for tickers")
+    val.add_argument("tickers", help="comma-separated tickers")
+    val.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
+
+    why = sub.add_parser("why", help="web-research why a crossing stock has lagged since the crossing")
+    why.add_argument("ticker")
+    why.add_argument("--model", default="sonnet", help="claude model alias (default sonnet)")
+    why.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
+
     serve = sub.add_parser(
         "serve", help="serve the inflections report live, with per-row buttons to start/stop "
                        "the earnings-call moonshot pipeline and watch it run"
@@ -413,6 +422,25 @@ def stop_server(args: argparse.Namespace) -> int:
     return 1
 
 
+def valuation(args: argparse.Namespace) -> int:
+    from .valuation import write_valuation
+    failed = 0
+    for ticker in (t.strip().upper() for t in args.tickers.split(",") if t.strip()):
+        try:
+            print(f"{ticker}: {write_valuation(ticker, args.data_dir)}", file=sys.stderr)
+        except Exception as exc:
+            failed += 1
+            print(f"{ticker}: failed ({exc})", file=sys.stderr)
+    return 1 if failed else 0
+
+
+def why(args: argparse.Namespace) -> int:
+    from .research import run_research
+    path = run_research(args.ticker, args.data_dir, DEFAULT_RESULTS_DIR, args.model)
+    print(f"{args.ticker.upper()}: {path}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     args = _build_parser().parse_args(argv)
@@ -426,6 +454,10 @@ def main(argv: list[str] | None = None) -> int:
         return inflect(args)
     if args.command == "inflect-report":
         return inflect_report(args)
+    if args.command == "valuation":
+        return valuation(args)
+    if args.command == "why":
+        return why(args)
     if args.command == "serve":
         return serve(args)
     if args.command == "stop":

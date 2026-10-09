@@ -10,8 +10,10 @@ from pathlib import Path
 import pandas as pd
 
 from .fundamentals import cik_map
-from .report import _fundamentals_payload, _weekly_series
-from .sector import etf_for_sic, load_etf_series
+from .report import _fundamentals_payload, _weekly_series, rise_pct
+from .research import load_research
+from .sector import etf_for_sic, load_etf_series, sic_for_ticker
+from .valuation import load_valuation
 
 TEMPLATE = Path(__file__).with_name("inflections_template.html")
 
@@ -23,15 +25,8 @@ DEFAULT_MOONSHOT_DIR = Path(__file__).resolve().parents[4] / "data" / "earnings_
 PHARMA_SIC_PREFIXES = ("283", "8731")
 
 
-def _sic(ticker: str, sec_dir: Path, ciks: dict[str, int]) -> str:
-    path = sec_dir / f"sub_{ciks.get(ticker, 0)}.json"
-    if not path.exists():
-        return ""
-    return json.loads(path.read_text()).get("sic") or ""
-
-
 def _is_pharma(ticker: str, sec_dir: Path, ciks: dict[str, int]) -> bool:
-    return _sic(ticker, sec_dir, ciks).startswith(PHARMA_SIC_PREFIXES)
+    return sic_for_ticker(ticker, sec_dir, ciks).startswith(PHARMA_SIC_PREFIXES)
 
 
 def _drop_pharma(df: pd.DataFrame, sec_dir: Path) -> pd.DataFrame:
@@ -52,16 +47,6 @@ def _known_day(crossing_period_end: str, fund: dict | None) -> int:
     if fund and period_end in fund["pe"]:
         return fund["a"][fund["pe"].index(period_end)]
     return period_end
-
-
-def _rise_pct(series: dict | None, known_day: int) -> float | None:
-    """Percent change from the last weekly close before `known_day` to the latest close."""
-    if not series:
-        return None
-    before = [p for d, p in zip(series["d"], series["p"]) if d < known_day]
-    if not before or before[-1] <= 0:
-        return None
-    return round((series["p"][-1] / before[-1] - 1) * 100, 1)
 
 
 def _relative_pct(stock_rise: float | None, sector_rise: float | None) -> float | None:
@@ -113,16 +98,27 @@ def _moonshot_payload(tickers: list[str], moonshot_dir: Path) -> dict:
 
 def _add_rise_columns(crossings: pd.DataFrame, series: dict, fund: dict, data_dir: Path) -> None:
     sec_dir, ciks = data_dir / "sec", cik_map(data_dir / "sec")
-    crossings["sector_etf"] = [etf_for_sic(_sic(t, sec_dir, ciks)) for t in crossings["ticker"]]
+    crossings["sector_etf"] = [etf_for_sic(sic_for_ticker(t, sec_dir, ciks)) for t in crossings["ticker"]]
     etf_series = {e: load_etf_series(e, data_dir / "sector") for e in sorted(set(crossings["sector_etf"]))}
     rise, sector_rise = [], []
     for r in crossings.itertuples():
         known = _known_day(r.crossing_period_end, fund.get(r.ticker))
-        rise.append(_rise_pct(series.get(r.ticker), known))
-        sector_rise.append(_rise_pct(etf_series[r.sector_etf], known))
+        rise.append(rise_pct(series.get(r.ticker), known))
+        sector_rise.append(rise_pct(etf_series[r.sector_etf], known))
     crossings["rise_since_crossing_pct"] = rise
     crossings["sector_rise_pct"] = sector_rise
     crossings["rise_vs_sector_pct"] = [_relative_pct(a, b) for a, b in zip(rise, sector_rise)]
+    ps_then, ps_now = [], []
+    for r in crossings.itertuples():
+        rows = (load_valuation(r.ticker, data_dir) or {}).get("rows", [])
+        at = next((v for v in rows if v["period_end"] >= str(r.crossing_period_end)[:10]), None)
+        ps_then.append(at["ps"] if at else None)
+        ps_now.append(rows[-1]["ps"] if rows else None)
+    crossings["ps_at_crossing"] = ps_then
+    crossings["ps_now"] = ps_now
+    crossings["ps_change_pct"] = [
+        round((b / a - 1) * 100, 1) if a and b else None for a, b in zip(ps_then, ps_now)
+    ]
 
 
 def build_inflections_report(
@@ -150,7 +146,9 @@ def build_inflections_report(
     if not crossings.empty:
         _add_rise_columns(crossings, series, fund, data_dir)
 
+    research = {t: r for t in all_tickers if (r := load_research(t, data_dir)) and "skipped" not in r}
     payload = {
+        "research": research,
         "crossings": json.loads(crossings.to_json(orient="records")),
         "failures": json.loads(failures.to_json(orient="records")),
         "series": series,

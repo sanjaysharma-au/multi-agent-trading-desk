@@ -16,6 +16,10 @@ SCRIPTS = Path(__file__).resolve().parent
 RAW_DIR = Path("data/earnings_calls")
 ANON_DIR = Path("data/earnings_calls_anon")
 SCORES_DIR = Path("data/earnings_call_scores")
+SCREENER_DIR = REPO_ROOT / "tools" / "stock-screener"
+SCREENER_BIN = SCREENER_DIR / ".venv" / "bin" / "moonshot"
+VALUATION_DIR = SCREENER_DIR / "data" / "valuation"
+RESEARCH_DIR = SCREENER_DIR / "data" / "research"
 
 VARIANTS = {
     "identified": {
@@ -90,6 +94,10 @@ def _reconcile_progress(ticker: str, transcript_dir: Path, analysis_dir: Path) -
         print(f"  reconciled progress log: dropped {len(logged) - len(kept)} entries that are incomplete or stale")
 
 
+def _file_missing(path: Path) -> list[str]:
+    return [] if path.exists() else [path.name]
+
+
 def build_steps(ticker: str, variants: list[str], args: argparse.Namespace) -> list[Step]:
     py = sys.executable
     steps: list[Step] = []
@@ -160,6 +168,15 @@ def build_steps(ticker: str, variants: list[str], args: argparse.Namespace) -> l
             score_cmd,
             lambda t=transcript_dir, a=analysis_dir, s=suffix: _outstanding(_labels(ticker, t), _scored(ticker, a, s)),
         ))
+
+    # Market-aware steps. They read prices and web research, so their output is kept apart from
+    # the blind analysis and scoring above and is never fed back into them.
+    if not args.no_valuation:
+        steps.append(Step("valuation", [str(SCREENER_BIN), "valuation", ticker],
+                          lambda: _file_missing(VALUATION_DIR / f"{ticker}.json")))
+    if not args.no_research:
+        steps.append(Step("research", [str(SCREENER_BIN), "why", ticker],
+                          lambda: _file_missing(RESEARCH_DIR / f"{ticker}.json")))
     return steps
 
 
@@ -214,6 +231,8 @@ def main():
     parser.add_argument("--cik", type=int, default=None,
                         help="SEC CIK, for tickers the SEC's ticker list does not have (for example delisted companies)")
     parser.add_argument("--refetch", action="store_true", help="fetch transcripts even if some are on disk")
+    parser.add_argument("--no-valuation", action="store_true", help="skip the price-to-sales history step")
+    parser.add_argument("--no-research", action="store_true", help="skip the web research step on why a crossing stock lagged")
     parser.add_argument("--status", action="store_true", help="show what is done and outstanding, then exit")
     parser.add_argument("--allow-chain-break", action="store_true",
                         help="analyze a call even when the preceding call's ledger could not be produced (recorded as chain_break)")

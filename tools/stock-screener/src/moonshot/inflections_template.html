@@ -207,6 +207,17 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
     </div>
   </div>
 
+  <div class="card" id="research-card" hidden>
+    <div class="detail-head">
+      <h2>Why it lags</h2>
+      <div class="score-badge" id="research-verdict"></div>
+    </div>
+    <p class="note" id="research-meta"></p>
+    <p id="research-summary"></p>
+    <ul id="research-drivers"></ul>
+    <p class="note" id="research-sources"></p>
+  </div>
+
   <div class="card" id="moonshot-card" hidden>
     <h2>Earnings-call moonshot pipeline</h2>
     <p class="note">Scored from earnings-call transcripts and SEC press releases, blind to price. Proximity is how close the dream looks to real; momentum is the size of the change since the previous call.</p>
@@ -585,18 +596,55 @@ if (LIVE) {
 }
 
 // ---------- price + fundamentals detail (shared across both tabs) ----------
+const RESEARCH = DATA.research || {};
+const VERDICT_LABELS = { likely_deserved: "likely deserved", possibly_undervalued: "possibly undervalued", unclear: "unclear" };
+function renderResearchCard(r) {
+  const card = document.getElementById("research-card");
+  const rs = r ? RESEARCH[r.ticker] : null;
+  card.hidden = !rs;
+  if (!rs) return;
+  const verdict = document.getElementById("research-verdict");
+  verdict.textContent = VERDICT_LABELS[rs.verdict] || rs.verdict;
+  verdict.className = "score-badge" + (rs.verdict === "possibly_undervalued" ? " up" : rs.verdict === "likely_deserved" ? " down" : "");
+  verdict.title = rs.verdict_reason || "";
+  const f = rs.facts || {};
+  const pct = v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%";
+  document.getElementById("research-meta").textContent =
+    `Researched ${rs.generated} by web search. Stock ${pct(f.stock_change_since_announcement_pct)} since the crossing was announced vs ${f.sector_etf} ${pct(f.sector_etf_change_same_period_pct)}. ` +
+    (f.price_to_sales_now != null ? `Price-to-sales ${f.price_to_sales_at_crossing ?? "–"} at the crossing, ${f.price_to_sales_now} now. ` : "") +
+    "Kept separate from the blind scoring. Not investment advice.";
+  document.getElementById("research-summary").textContent = rs.summary || "";
+  const ul = document.getElementById("research-drivers");
+  ul.replaceChildren();
+  for (const d of rs.drivers || []) {
+    const li = document.createElement("li");
+    li.textContent = `${String(d.category).replace(/_/g, " ")}: ${d.detail}`;
+    ul.appendChild(li);
+  }
+  const src = document.getElementById("research-sources");
+  src.replaceChildren(document.createTextNode("Sources: "));
+  (rs.sources || []).filter(u => /^https?:\/\//.test(u)).forEach((u, i) => {
+    if (i) src.appendChild(document.createTextNode(" · "));
+    const a = document.createElement("a");
+    a.href = u; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.textContent = new URL(u).hostname.replace(/^www\./, "");
+    src.appendChild(a);
+  });
+}
+
 function renderDetail() {
   const plot = document.getElementById("detail");
   plot.replaceChildren();
   const r = selected ? findRow(selected) : null;
   const title = document.getElementById("detail-title");
   const legend = document.getElementById("detail-legend");
-  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); renderMoonshotBadge(null); renderMoonshotCard(null); renderRunCtl(); renderChat(null); renderFund(null); renderQuarterTable(null); return; }
+  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); renderMoonshotBadge(null); renderMoonshotCard(null); renderResearchCard(null); renderRunCtl(); renderChat(null); renderFund(null); renderQuarterTable(null); return; }
   const kind = rowKind(r.ticker);
   title.textContent = `${r.ticker}${r.name ? " · " + r.name : ""}`;
   renderScoreBadge(r);
   renderMoonshotBadge(r);
   renderMoonshotCard(r);
+  renderResearchCard(r);
   renderRunCtl();
   renderChat(r.ticker);
   const s = series[r.ticker];
@@ -776,6 +824,7 @@ const COLS = {
     ["crossing_period_end", "Crossed", "str"],
     ["rise_since_crossing_pct", "Rise", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"],
     ["rise_vs_sector_pct", "vs Sector", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"],
+    ["ps_change_pct", "P/S chg", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"],
     ["nemotron_score", "Fund.", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
     ["moonshot_tier", "Tier", "str", v => v ?? "–"],
     ["moonshot_proximity", "Prox.", "num", v => v == null ? "–" : v],
@@ -788,7 +837,7 @@ const COLS = {
   ],
 };
 const TABLE_NOTES = {
-  crossings: "Sorted by stock rise relative to its sector, smallest first. Rise is measured from the last weekly close before the crossing quarter's results were announced to the latest close; vs Sector compares that to the same-period rise of the sector ETF (hover the cell for the ETF). Pharma companies are excluded. A confirmed crossing needs at least 2 quarters of track record since.",
+  crossings: "Sorted by stock rise relative to its sector, smallest first. Rise is measured from the last weekly close before the crossing quarter's results were announced to the latest close; vs Sector compares that to the same-period rise of the sector ETF (hover the cell for the ETF). P/S chg is the change in price-to-sales between the crossing and now: a big drop with growing revenue means the multiple compressed. Pharma companies are excluded. A confirmed crossing needs at least 2 quarters of track record since.",
   failures: "Sorted by revenue-to-burn ratio, worst first. A low ratio alone doesn't distinguish a genuinely failing company from an early-stage business (e.g. a pre-revenue biotech) that simply hasn't launched yet - read the fundamentals score for that judgment.",
 };
 let sortKey = { crossings: "rise_vs_sector_pct", failures: "revenue_to_burn_ratio" };
@@ -836,6 +885,7 @@ function renderTable() {
       if (key === "ticker") td.style.fontWeight = "600";
       if (key === "nemotron_score" && v != null) { if (v > 0) td.classList.add("up"); else if (v < 0) td.classList.add("down"); td.title = r.nemotron_rationale || ""; }
       if ((key === "moonshot_tier" || key === "moonshot_proximity") && v != null) td.title = r.moonshot_rationale || "";
+      if (key === "ps_change_pct" && v != null) td.title = `Price-to-sales ${r.ps_at_crossing} at the crossing, ${r.ps_now} now`;
       if (key === "rise_vs_sector_pct" && v != null) { td.classList.add(v >= 0 ? "up" : "down"); td.title = `Sector ${r.sector_etf}: ${r.sector_rise_pct > 0 ? "+" : ""}${Math.round(r.sector_rise_pct)}% over the same period`; }
       if (key === "rise_since_crossing_pct" && v != null) { td.classList.add(v >= 0 ? "up" : "down"); td.title = "Stock change since the crossing quarter's results were announced"; }
       if (key === "revenue_to_burn_ratio" && v != null) td.classList.add("down");

@@ -35,6 +35,16 @@ def _weekly_series(ticker: str, prices_dir: Path) -> dict | None:
     return {"d": [int(d) for d in days], "p": [float(f"{v:.5g}") for v in s]}
 
 
+def rise_pct(series: dict | None, known_day: int) -> float | None:
+    """Percent change from the last weekly close before `known_day` to the latest close."""
+    if not series:
+        return None
+    before = [p for d, p in zip(series["d"], series["p"]) if d < known_day]
+    if not before or before[-1] <= 0:
+        return None
+    return round((series["p"][-1] / before[-1] - 1) * 100, 1)
+
+
 def _days(s: pd.Series) -> list[int]:
     return [int(d) for d in (pd.to_datetime(s) - pd.Timestamp("1970-01-01")).dt.days]
 
