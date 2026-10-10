@@ -11,6 +11,7 @@ dependencies = ["yfinance>=0.2.40", "pandas>=2.0", "pyarrow>=14", "requests>=2.3
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+research = ["scipy>=1.11"]
 
 [project.scripts]
 moonshot = "moonshot.cli:main"

@@ -12,6 +12,7 @@ PIPELINE = Path(__file__).resolve().with_name("run_moonshot_pipeline.py")
 SCREENER_BIN = REPO_ROOT / "tools" / "stock-screener" / ".venv" / "bin" / "moonshot"
 LOG_DIR = REPO_ROOT / "logs" / "crossing_queue"
 STATE_PATH = LOG_DIR / "state.json"
+PRIORITY_PATH = LOG_DIR / "priority.txt"
 LOCK_PATH = LOG_DIR / "queue.lock"
 
 PIPELINE_ARGS = [
@@ -20,10 +21,15 @@ PIPELINE_ARGS = [
 ]
 
 
-def queue_tickers() -> list[str]:
-    result = subprocess.run([str(SCREENER_BIN), "queue"], capture_output=True, text=True, cwd=REPO_ROOT)
+QUEUES = ["inflections", "depressed"]
+META_KEY = "_meta"
+
+
+def queue_tickers(page: str = "inflections") -> list[str]:
+    result = subprocess.run([str(SCREENER_BIN), "queue", "--page", page], capture_output=True, text=True, cwd=REPO_ROOT)
     if result.returncode != 0:
-        raise SystemExit(f"moonshot queue failed: {result.stderr.strip()}")
+        print(f"moonshot queue --page {page} failed: {result.stderr.strip()}", flush=True)
+        return []
     return result.stdout.split()
 
 
@@ -44,6 +50,24 @@ def save_state(state: dict) -> None:
 def pending(tickers: list[str], state: dict, max_attempts: int) -> list[str]:
     return [t for t in tickers
             if not state.get(t, {}).get("complete") and state.get(t, {}).get("attempts", 0) < max_attempts]
+
+
+def priority_tickers() -> list[str]:
+    return PRIORITY_PATH.read_text().replace(",", " ").upper().split() if PRIORITY_PATH.exists() else []
+
+
+def next_ticker(queues: dict[str, list[str]], state: dict, turn: str, max_attempts: int) -> tuple[str, str] | None:
+    """Priority tickers first, then the first unfinished ticker from the queue whose turn it is, else
+    from the other queue. A ticker found complete on disk is marked and skipped."""
+    order = [turn] + [q for q in QUEUES if q != turn]
+    for page, tickers in [("priority", priority_tickers())] + [(q, queues[q]) for q in order]:
+        for ticker in pending(tickers, state, max_attempts):
+            if is_complete(ticker):
+                state.setdefault(ticker, {"attempts": 0})["complete"] = True
+                save_state(state)
+                continue
+            return page, ticker
+    return None
 
 
 def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
@@ -85,6 +109,8 @@ def main() -> None:
                         help="after a ticker completes in under this many minutes, run the next one straight away "
                         "instead of waiting for the next timer (default 10; 0 disables)")
     parser.add_argument("--ticker", help="run this ticker instead of the next one in the queue")
+    parser.add_argument("--prioritize", help="comma-separated tickers to run before everything else, in this order "
+                        "(replaces the current priority list; empty string clears it)")
     parser.add_argument("--list", action="store_true", help="print the pending queue and exit")
     parser.add_argument("--retry-failed", action="store_true", help="clear the attempt counters first")
     args = parser.parse_args()
@@ -92,13 +118,23 @@ def main() -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     state = load_state()
     if args.retry_failed:
-        for entry in state.values():
-            entry["attempts"] = 0
+        for key, entry in state.items():
+            if key != META_KEY:
+                entry["attempts"] = 0
         save_state(state)
 
+    if args.prioritize is not None:
+        PRIORITY_PATH.write_text(" ".join(t.strip().upper() for t in args.prioritize.split(",") if t.strip()) + "\n")
+        print(f"priority list: {priority_tickers() or 'cleared'}")
+        return
+
+    queues = {page: queue_tickers(page) for page in QUEUES}
     if args.list:
-        todo = pending(queue_tickers(), state, args.max_attempts)
-        print(f"{len(todo)} pending:\n" + "\n".join(todo))
+        todo = pending(priority_tickers(), state, args.max_attempts)
+        print(f"priority: {len(todo)} pending" + (f", next: {', '.join(todo[:5])}" if todo else ""))
+        for page in QUEUES:
+            todo = pending(queues[page], state, args.max_attempts)
+            print(f"{page}: {len(todo)} pending" + (f", next: {', '.join(todo[:5])}" if todo else ""))
         return
 
     with LOCK_PATH.open("w") as lock:
@@ -110,16 +146,20 @@ def main() -> None:
         if args.ticker:
             run_ticker(args.ticker.upper(), state, args.timeout_hours)
             return
-        for ticker in pending(queue_tickers(), state, args.max_attempts):
-            if is_complete(ticker):
-                state.setdefault(ticker, {"attempts": 0})["complete"] = True
-                save_state(state)
-                continue
+        while True:
+            turn = state.get(META_KEY, {}).get("next_queue", QUEUES[0])
+            pick = next_ticker(queues, state, turn, args.max_attempts)
+            if pick is None:
+                print("queues empty: every ticker is complete or out of attempts")
+                return
+            page, ticker = pick
+            if page != "priority":
+                state[META_KEY] = {"next_queue": QUEUES[(QUEUES.index(page) + 1) % len(QUEUES)]}
+            print(f"[{page}] ", end="", flush=True)
             elapsed = run_ticker(ticker, state, args.timeout_hours)
             if state[ticker]["complete"] and elapsed < args.fast_minutes * 60:
                 continue
             return
-        print("queue empty: every crossing is complete or out of attempts")
 
 
 if __name__ == "__main__":
