@@ -89,7 +89,19 @@ def build_valuation(ticker: str, data_dir: Path, ciks: dict[str, int] | None = N
         })
     if not rows:
         return None
-    return {"ticker": ticker.upper(), "rows": rows}
+    return {"ticker": ticker.upper(), "rows": rows, "ps_current": _current_ps(rows, df, closes), "price_date": f"{closes.index[-1]:%Y-%m-%d}"}
+
+
+def _current_ps(rows: list[dict], df: pd.DataFrame, closes: pd.Series) -> float | None:
+    """Price-to-sales at the latest close: the last announcement's P/S scaled by how much the price
+    has moved since. Share count and revenue are as of that announcement."""
+    last = df[df["period_end"] == pd.Timestamp(rows[-1]["period_end"])]
+    if last.empty or not rows[-1]["ps"]:
+        return None
+    before = closes[closes.index < last["announced"].iloc[0]]
+    if before.empty or before.iloc[-1] <= 0:
+        return None
+    return round(rows[-1]["ps"] * float(closes.iloc[-1]) / float(before.iloc[-1]), 2)
 
 
 def valuation_path(ticker: str, data_dir: Path) -> Path:

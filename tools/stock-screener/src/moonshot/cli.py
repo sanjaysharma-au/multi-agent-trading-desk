@@ -124,7 +124,22 @@ def _build_parser() -> argparse.ArgumentParser:
     val.add_argument("tickers", help="comma-separated tickers")
     val.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
 
-    queue = sub.add_parser("queue", help="print crossing tickers, most recent crossing first, pharma excluded")
+    dep = sub.add_parser("depressed", help="find stocks far below their highs that still have sound fundamentals")
+    dep.add_argument("--min-drawdown", type=float, default=40.0, help="min %% below the 52-week high (default 40)")
+    dep.add_argument("--min-price", type=float, default=3.0, help="min share price (default 3)")
+    dep.add_argument("--min-dollar-volume", type=float, default=1_000_000, help="min 20d avg $ volume (default 1,000,000)")
+    dep.add_argument("--min-growth", type=float, default=10.0, help="min trailing-12-month revenue growth %% (default 10)")
+    dep.add_argument("--include-pharma", action="store_true", help="keep pharma/biotech (excluded by default)")
+    dep.add_argument("--no-valuation", action="store_true", help="skip the price-to-sales history step")
+    dep.add_argument("--tickers", help="comma-separated tickers instead of the full US universe")
+    dep.add_argument("--max-age", type=float, default=1, help="price cache max age in days (default 1; refreshes stale prices)")
+    dep.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
+    dep.add_argument("--out", type=Path, help="output CSV (default results/depressed_<date>.csv)")
+    dep.add_argument("--top", type=int, default=25, help="rows to print (default 25)")
+
+    queue = sub.add_parser("queue", help="print the tickers to run through the pipeline: crossings (most recent first, "
+                                         "pharma excluded) or, with --page depressed, the depressed list (deepest first)")
+    queue.add_argument("--page", choices=["inflections", "depressed"], default="inflections")
     queue.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
 
     why = sub.add_parser("why", help="web-research why a crossing stock has lagged since the crossing")
@@ -143,14 +158,17 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
     serve.add_argument("--moonshot-dir", type=Path,
                         help="earnings-call moonshot pipeline scores dir (default: multi-agent-trading-desk/data/earnings_call_scores)")
+    serve.add_argument("--page", choices=["inflections", "depressed"], default="inflections",
+                        help="which report to serve (default inflections); depressed uses the latest results/depressed_*.csv")
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--port", type=int, help="default 8765 (inflections) or 8766 (depressed)")
     serve.add_argument("--no-open", action="store_true", help="don't open the page in a browser")
     serve.add_argument("--rebuild", action="store_true",
                         help="skip the build cache and rebuild the page from scratch even if nothing looks changed")
 
-    sub.add_parser("stop", help="stop a `moonshot serve` running in the background (does not touch "
-                                 "any earnings-call pipeline jobs it started - those are independent processes)")
+    stop = sub.add_parser("stop", help="stop a `moonshot serve` running in the background (does not touch "
+                                        "any earnings-call pipeline jobs it started - those are independent processes)")
+    stop.add_argument("--page", choices=["inflections", "depressed"], default="inflections")
     return parser
 
 
@@ -375,25 +393,41 @@ def inflect_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _latest_depressed_csv() -> Path | None:
+    files = [f for f in DEFAULT_RESULTS_DIR.glob("depressed_*.csv") if re.fullmatch(r"depressed_\d{8}", f.stem)]
+    return max(files, key=lambda f: f.stem) if files else None
+
+
 def serve(args: argparse.Namespace) -> int:
     from .control_server import DEFAULT_MOONSHOT_DIR, run_server
 
-    crossings = args.crossings or _latest_inflections_csv(want_failures=False)
-    failures = args.failures or _latest_inflections_csv(want_failures=True)
-    if not crossings and not failures:
-        print("No inflections CSV found; run `moonshot inflect` first, or pass --crossings/--failures.",
-              file=sys.stderr)
-        return 1
-    print(f"Using crossings: {crossings or '(none)'}", file=sys.stderr)
-    print(f"Using failures: {failures or '(none)'}", file=sys.stderr)
+    if args.page == "depressed":
+        crossings = args.crossings or _latest_depressed_csv()
+        failures = None
+        if not crossings:
+            print("No depressed CSV found; run `moonshot depressed` first, or pass --crossings.", file=sys.stderr)
+            return 1
+        print(f"Using depressed list: {crossings}", file=sys.stderr)
+    else:
+        crossings = args.crossings or _latest_inflections_csv(want_failures=False)
+        failures = args.failures or _latest_inflections_csv(want_failures=True)
+        if not crossings and not failures:
+            print("No inflections CSV found; run `moonshot inflect` first, or pass --crossings/--failures.",
+                  file=sys.stderr)
+            return 1
+        print(f"Using crossings: {crossings or '(none)'}", file=sys.stderr)
+        print(f"Using failures: {failures or '(none)'}", file=sys.stderr)
+    port = args.port or (8766 if args.page == "depressed" else 8765)
     run_server(crossings, failures, args.data_dir, args.crossings_scores, args.failures_scores,
-               args.moonshot_dir or DEFAULT_MOONSHOT_DIR, args.host, args.port,
-               open_browser=not args.no_open, rebuild=args.rebuild)
+               args.moonshot_dir or DEFAULT_MOONSHOT_DIR, args.host, port,
+               open_browser=not args.no_open, rebuild=args.rebuild, page=args.page)
     return 0
 
 
 def stop_server(args: argparse.Namespace) -> int:
-    from .control_server import PID_FILE
+    from .control_server import pid_file
+
+    PID_FILE = pid_file(args.page)
 
     if not PID_FILE.exists():
         print("No `moonshot serve` appears to be running (no PID file found).", file=sys.stderr)
@@ -425,6 +459,33 @@ def stop_server(args: argparse.Namespace) -> int:
     return 1
 
 
+def depressed(args: argparse.Namespace) -> int:
+    from .depressed import add_valuation_columns, run_screen, write_params
+    if args.tickers:
+        universe = pd.DataFrame({"ticker": [t.strip().upper() for t in args.tickers.split(",") if t.strip()]})
+        universe["name"], universe["exchange"] = None, None
+    else:
+        universe = load_universe(args.data_dir / "universe", 1)
+    df = run_screen(universe, args.data_dir, args.min_drawdown, args.min_price, args.min_dollar_volume,
+                    args.min_growth, args.max_age, args.include_pharma)
+    if df.empty:
+        print("No stocks passed the screen.", file=sys.stderr)
+        return 0
+    if not args.no_valuation:
+        print(f"{len(df)} passed; building price-to-sales history...", file=sys.stderr)
+        df = add_valuation_columns(df, args.data_dir)
+    out = args.out or DEFAULT_RESULTS_DIR / f"depressed_{dt.date.today():%Y%m%d}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    write_params(out, {"min_drawdown": args.min_drawdown, "min_price": args.min_price,
+                       "min_dollar_volume": args.min_dollar_volume, "min_growth": args.min_growth,
+                       "include_pharma": args.include_pharma})
+    cols = ["ticker", "dd_52w_pct", "dd_3y_pct", "revenue_growth_pct", "fcf_margin_pct", "ps_now", "ps_vs_3y_median_pct"]
+    print(df[[c for c in cols if c in df.columns]].head(args.top).to_string(index=False))
+    print(f"\n{len(df)} stocks written to {out}", file=sys.stderr)
+    return 0
+
+
 def valuation(args: argparse.Namespace) -> int:
     from .valuation import write_valuation
     failed = 0
@@ -438,6 +499,13 @@ def valuation(args: argparse.Namespace) -> int:
 
 
 def queue(args: argparse.Namespace) -> int:
+    if args.page == "depressed":
+        path = _latest_depressed_csv()
+        if path is None:
+            print("No depressed CSV found; run `moonshot depressed` first.", file=sys.stderr)
+            return 1
+        print("\n".join(pd.read_csv(path)["ticker"]))
+        return 0
     from .report_inflections import _drop_pharma
     path = _latest_inflections_csv(want_failures=False)
     if path is None:
@@ -469,6 +537,8 @@ def main(argv: list[str] | None = None) -> int:
         return inflect(args)
     if args.command == "inflect-report":
         return inflect_report(args)
+    if args.command == "depressed":
+        return depressed(args)
     if args.command == "valuation":
         return valuation(args)
     if args.command == "queue":

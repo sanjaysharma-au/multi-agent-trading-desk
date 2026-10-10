@@ -215,7 +215,7 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
 
   <div class="card" id="research-card" hidden>
     <div class="detail-head">
-      <h2>Why it moved vs its sector</h2>
+      <h2 id="research-title">Why it moved vs its sector</h2>
       <div class="score-badge" id="research-verdict"></div>
     </div>
     <p class="note" id="research-meta"></p>
@@ -246,7 +246,7 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
     <h2 id="chat-title">Ask about this stock</h2>
     <button type="button" class="export" id="chat-reset">New conversation</button>
   </div>
-  <p class="note">Answers come from Claude, given this ticker's fundamentals-crossing data and moonshot pipeline scores above, plus general knowledge and a web search. Not investment advice.</p>
+  <p class="note">Answers come from Claude, given this ticker's screen data and moonshot pipeline scores above, plus general knowledge and a web search. Not investment advice.</p>
   <div class="chat-log" id="chat-log"></div>
   <form class="chat-form" id="chat-form">
     <input type="text" id="chat-input" placeholder="Ask a question about this stock…" autocomplete="off">
@@ -274,6 +274,15 @@ systemDark.addEventListener("change", syncToggleLabel);
 <script>
 const DATA = /*DATA*/null;
 const LISTS = { crossings: DATA.crossings || [], failures: DATA.failures || [] };
+const PAGE = DATA.page || "inflections";
+const PARAMS = DATA.params || {};
+if (PAGE === "depressed") {
+  document.title = "Beaten Down, Still Sound";
+  document.querySelector("h1").textContent = document.title;
+  document.querySelector('#tabs button[data-t="crossings"]').firstChild.textContent = "Depressed ";
+  document.querySelector('#tabs button[data-t="failures"]').hidden = true;
+  document.getElementById("research-title").textContent = "Why it's down";
+}
 const series = DATA.series || {}, FUND = DATA.fundamentals || {};
 const MOONSHOT = DATA.moonshot || {};
 const LIVE = !!DATA.live;
@@ -361,7 +370,27 @@ function rowKind(ticker) {
 }
 
 // ---------- header ----------
+function renderHeaderDepressed() {
+  const rows = LISTS.crossings;
+  document.getElementById("sub").textContent =
+    `${rows.length} stocks at least ${PARAMS.min_drawdown ?? "?"}% below their 52-week high that still show GAAP profit, positive free cash flow and revenue growth of at least ${PARAMS.min_growth ?? "?"}% (trailing 12 months, SEC filings) · generated ${DATA.generated}`;
+  const tiles = [
+    ["Stocks found", String(rows.length)],
+    ["Median drawdown", rows.length ? "-" + Math.round(median(rows.map(r => r.dd_52w_pct))) + "%" : "–"],
+    ["Median revenue growth", rows.length ? "+" + Math.round(median(rows.map(r => r.revenue_growth_pct))) + "%" : "–"],
+    ["Median P/S vs 3-year median", (() => { const v = median(rows.map(r => r.ps_vs_3y_median_pct).filter(x => x != null)); return v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"; })()],
+  ];
+  const box = document.getElementById("tiles");
+  for (const [label, value] of tiles) {
+    const t = document.createElement("div"); t.className = "tile";
+    const l = document.createElement("div"); l.className = "label"; l.textContent = label;
+    const v = document.createElement("div"); v.className = "value"; v.textContent = value;
+    t.append(l, v); box.appendChild(t);
+  }
+  document.getElementById("n-crossings").textContent = `(${rows.length})`;
+}
 function renderHeader() {
+  if (PAGE === "depressed") return renderHeaderDepressed();
   const c = LISTS.crossings.length, f = LISTS.failures.length;
   document.getElementById("sub").textContent =
     `${c} fundamentals crossings (Palantir-shaped) and ${f} failures (Canoo-shaped) found in SEC filings · generated ${DATA.generated}`;
@@ -632,7 +661,10 @@ function renderResearchCard(r) {
   verdict.title = rs.verdict_reason || "";
   const f = rs.facts || {};
   const pct = v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%";
-  document.getElementById("research-meta").textContent =
+  document.getElementById("research-meta").textContent = f.kind === "depressed" ?
+    `Researched ${rs.generated} by web search. ${Math.round(f.drawdown_52w_pct)}% below its 52-week high and ${Math.round(f.drawdown_3y_pct)}% below its 3-year high; revenue growth ${pct(f.revenue_growth_ttm_pct)}, free cash flow margin ${Math.round(f.fcf_margin_pct)}%. ` +
+    (f.price_to_sales_now != null ? `Price-to-sales ${f.price_to_sales_now}` + (f.ps_vs_3y_median_pct != null ? ` (${pct(f.ps_vs_3y_median_pct)} vs its 3-year median). ` : ". ") : "") +
+    "Kept separate from the blind scoring. Not investment advice." :
     `Researched ${rs.generated} by web search. Stock ${pct(f.stock_change_since_announcement_pct)} since the crossing was announced vs ${f.sector_etf} ${pct(f.sector_etf_change_same_period_pct)}. ` +
     (f.price_to_sales_now != null ? `Price-to-sales ${f.price_to_sales_at_crossing ?? "–"} at the crossing, ${f.price_to_sales_now} now. ` : "") +
     "Kept separate from the blind scoring. Not investment advice.";
@@ -674,7 +706,7 @@ function renderDetail() {
   const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
   legend.innerHTML = '<span><i style="background:var(--series-1)"></i>Adjusted close</span>' +
-    (kind === "crossing" ? '<span><i style="background:var(--select)"></i>Crossing quarter</span>' : "");
+    (kind === "crossing" && PAGE === "inflections" ? '<span><i style="background:var(--select)"></i>Crossing quarter</span>' : "");
   if (!s || !s.d.length) {
     detailScale = { ts: null, tp: null };
     renderFund(r); renderQuarterTable(r);
@@ -865,6 +897,23 @@ const TABLE_NOTES = {
 };
 let sortKey = { crossings: "rise_vs_sector_pct", failures: "revenue_to_burn_ratio" };
 let sortDir = { crossings: 1, failures: 1 };
+if (PAGE === "depressed") {
+  const signed = v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%";
+  COLS.crossings = [
+    ["ticker", "Ticker", "str"], ["name", "Name", "str", trimName],
+    ["dd_52w_pct", "Down", "num", v => v == null ? "–" : "-" + Math.round(v) + "%"],
+    ["dd_3y_pct", "3y", "num", v => v == null ? "–" : "-" + Math.round(v) + "%"],
+    ["revenue_growth_pct", "Rev g", "num", signed],
+    ["fcf_margin_pct", "FCF %", "num", v => v == null ? "–" : Math.round(v) + "%"],
+    ["ps_now", "P/S", "num", v => v == null ? "–" : v.toFixed(1)],
+    ["ps_vs_3y_median_pct", "P/S vs 3y", "num", signed],
+    ["nemotron_score", "Fund.", "num", v => v == null ? "–" : (v > 0 ? "+" : "") + v],
+    ["moonshot_tier", "Tier", "str", v => v ?? "–"],
+    ["moonshot_proximity", "Prox.", "num", v => v == null ? "–" : v],
+  ];
+  TABLE_NOTES.crossings = "Sorted by drawdown from the 52-week high, deepest first. Down and 3y are the fall from the 52-week and 3-year highs of adjusted close. Rev g is trailing-12-month revenue growth against the 12 months before; FCF % is trailing free cash flow over revenue. P/S vs 3y compares price-to-sales now with its median over the last three years of earnings announcements: a large negative number means the multiple has compressed. Pharma and biotech are excluded. Click any header to re-sort.";
+  sortKey.crossings = "dd_52w_pct"; sortDir.crossings = -1;
+}
 let currentList = [];
 
 function matches(r) {
@@ -911,6 +960,8 @@ function renderTable() {
       if (key === "ps_change_pct" && v != null) td.title = `Price-to-sales ${r.ps_at_crossing} at the crossing, ${r.ps_now} now`;
       if (key === "rise_vs_sector_pct" && v != null) { td.classList.add(v >= 0 ? "up" : "down"); td.title = `Sector ${r.sector_etf}: ${r.sector_rise_pct > 0 ? "+" : ""}${Math.round(r.sector_rise_pct)}% over the same period`; }
       if (key === "rise_since_crossing_pct" && v != null) { td.classList.add(v >= 0 ? "up" : "down"); td.title = "Stock change since the crossing quarter's results were announced"; }
+      if (key === "dd_52w_pct" && v != null) td.classList.add("down");
+      if (key === "revenue_growth_pct" && v != null) td.classList.add(v >= 0 ? "up" : "down");
       if (key === "revenue_to_burn_ratio" && v != null) td.classList.add("down");
       tr.appendChild(td);
     }

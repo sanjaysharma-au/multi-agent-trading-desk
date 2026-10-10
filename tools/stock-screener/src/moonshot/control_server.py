@@ -39,13 +39,23 @@ LOG_TAIL_CHARS = 4000
 # too, which already invalidates the cache, but editing only the cached SEC data without
 # re-running inflect would not. Pass --rebuild to force a fresh build regardless.
 CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache"
-CACHE_HTML = CACHE_DIR / "live_report.html"
-CACHE_MANIFEST = CACHE_DIR / "live_report.manifest.json"
-PID_FILE = CACHE_DIR / "serve.pid"
+
+
+def cache_html(page: str = "inflections") -> Path:
+    return CACHE_DIR / ("live_report.html" if page == "inflections" else f"live_report_{page}.html")
+
+
+def cache_manifest(page: str = "inflections") -> Path:
+    return CACHE_DIR / ("live_report.manifest.json" if page == "inflections" else f"live_report_{page}.manifest.json")
+
+
+def pid_file(page: str = "inflections") -> Path:
+    return CACHE_DIR / ("serve.pid" if page == "inflections" else f"serve_{page}.pid")
+
 _FINGERPRINT_SOURCE_FILES = [
     Path(__file__), Path(__file__).with_name("cli.py"), Path(__file__).with_name("report.py"),
     Path(__file__).with_name("report_inflections.py"),
-    Path(__file__).with_name("sector.py"), Path(__file__).with_name("inflections_template.html"),
+    Path(__file__).with_name("sector.py"), Path(__file__).with_name("depressed.py"), Path(__file__).with_name("inflections_template.html"),
 ]
 
 
@@ -367,13 +377,14 @@ def run_server(
     crossings_csv: Path | None, failures_csv: Path | None, data_dir: Path,
     crossings_scores: Path | None, failures_scores: Path | None,
     moonshot_dir: Path, host: str, port: int, open_browser: bool = True, rebuild: bool = False,
+    page: str = "inflections",
 ) -> None:
     fp = _fingerprint(crossings_csv, failures_csv, crossings_scores, failures_scores, moonshot_dir)
     cached = None
-    if not rebuild and CACHE_HTML.exists() and CACHE_MANIFEST.exists():
+    if not rebuild and cache_html(page).exists() and cache_manifest(page).exists():
         try:
-            if json.loads(CACHE_MANIFEST.read_text()).get("fingerprint") == fp:
-                cached = CACHE_HTML.read_text()
+            if json.loads(cache_manifest(page).read_text()).get("fingerprint") == fp:
+                cached = cache_html(page).read_text()
         except (OSError, json.JSONDecodeError):
             cached = None
 
@@ -382,9 +393,9 @@ def run_server(
               file=sys.stderr)
         report_html = cached
     else:
-        out = Path("/tmp") / "inflections_report_live.html"
+        out = Path("/tmp") / f"{page}_report_live.html"
         build_inflections_report(crossings_csv, failures_csv, data_dir, out,
-                                  crossings_scores, failures_scores, moonshot_dir)
+                                  crossings_scores, failures_scores, moonshot_dir, page)
         report_html = out.read_text()
 
         # build_inflections_report always emits `const DATA = {...};\nconst LISTS`. Turn that into
@@ -398,8 +409,8 @@ def run_server(
         )
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        CACHE_HTML.write_text(report_html)
-        CACHE_MANIFEST.write_text(json.dumps({"fingerprint": fp}))
+        cache_html(page).write_text(report_html)
+        cache_manifest(page).write_text(json.dumps({"fingerprint": fp}))
 
     store = JobStore(REPO_ROOT / "logs" / "screener_live")
     chat = ChatStore()
@@ -409,14 +420,15 @@ def run_server(
     handler = make_handler(store, report_html.encode(), moonshot_dir, chat, context_fn)
     httpd = ThreadingHTTPServer((host, port), handler)
     url = f"http://{host}:{port}/"
-    print(f"Serving live inflections report at {url}", file=sys.stderr)
+    print(f"Serving live {page} report at {url}", file=sys.stderr)
     print(f"Pipeline: {PIPELINE}", file=sys.stderr)
     print(f"Python:   {PY}", file=sys.stderr)
     print(f"Moonshot scores read from: {moonshot_dir}", file=sys.stderr)
-    print(f"Stop it with: moonshot stop  (pid {os.getpid()})", file=sys.stderr)
+    print(f"Stop it with: moonshot stop{'' if page == 'inflections' else f' --page {page}'}  (pid {os.getpid()})",
+          file=sys.stderr)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    PID_FILE.write_text(str(os.getpid()))
+    pid_file(page).write_text(str(os.getpid()))
 
     def _on_sigterm(signum, frame):
         raise SystemExit(0)
@@ -430,4 +442,4 @@ def run_server(
         pass
     finally:
         httpd.server_close()
-        PID_FILE.unlink(missing_ok=True)
+        pid_file(page).unlink(missing_ok=True)

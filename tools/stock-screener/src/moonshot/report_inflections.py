@@ -11,6 +11,7 @@ import pandas as pd
 
 from .fundamentals import cik_map
 from .report import _fundamentals_payload, _weekly_series, rise_pct
+from .depressed import load_params
 from .research import load_research
 from .sector import etf_for_sic, load_etf_series, sic_for_ticker
 from .valuation import load_valuation
@@ -110,10 +111,11 @@ def _add_rise_columns(crossings: pd.DataFrame, series: dict, fund: dict, data_di
     crossings["rise_vs_sector_pct"] = [_relative_pct(a, b) for a, b in zip(rise, sector_rise)]
     ps_then, ps_now = [], []
     for r in crossings.itertuples():
-        rows = (load_valuation(r.ticker, data_dir) or {}).get("rows", [])
+        valuation = load_valuation(r.ticker, data_dir) or {}
+        rows = valuation.get("rows", [])
         at = next((v for v in rows if v["period_end"] >= str(r.crossing_period_end)[:10]), None)
         ps_then.append(at["ps"] if at else None)
-        ps_now.append(rows[-1]["ps"] if rows else None)
+        ps_now.append(valuation.get("ps_current") or (rows[-1]["ps"] if rows else None))
     crossings["ps_at_crossing"] = ps_then
     crossings["ps_now"] = ps_now
     crossings["ps_change_pct"] = [
@@ -124,12 +126,15 @@ def _add_rise_columns(crossings: pd.DataFrame, series: dict, fund: dict, data_di
 def build_inflections_report(
     crossings_csv: Path | None, failures_csv: Path | None, data_dir: Path, out: Path,
     crossings_scores: Path | None = None, failures_scores: Path | None = None,
-    moonshot_dir: Path | None = None,
+    moonshot_dir: Path | None = None, page: str = "inflections",
 ) -> Path:
     crossings = pd.DataFrame()
     failures = pd.DataFrame()
     if crossings_csv and crossings_csv.exists():
-        crossings = _merge_scores(_drop_pharma(pd.read_csv(crossings_csv), data_dir / "sec"), crossings_scores)
+        listed = pd.read_csv(crossings_csv)
+        if page == "inflections":
+            listed = _drop_pharma(listed, data_dir / "sec")
+        crossings = _merge_scores(listed, crossings_scores)
     if failures_csv and failures_csv.exists():
         failures = _merge_scores(pd.read_csv(failures_csv), failures_scores)
 
@@ -143,11 +148,13 @@ def build_inflections_report(
             since[t] = pd.Timestamp("1970-01-01") + pd.Timedelta(days=s["d"][0])
     fund = _fundamentals_payload(all_tickers, data_dir, since)
     moonshot = _moonshot_payload(all_tickers, moonshot_dir or DEFAULT_MOONSHOT_DIR)
-    if not crossings.empty:
+    if not crossings.empty and page == "inflections":
         _add_rise_columns(crossings, series, fund, data_dir)
 
     research = {t: r for t in all_tickers if (r := load_research(t, data_dir)) and "skipped" not in r}
     payload = {
+        "page": page,
+        "params": load_params(crossings_csv) if page == "depressed" and crossings_csv else {},
         "research": research,
         "crossings": json.loads(crossings.to_json(orient="records")),
         "failures": json.loads(failures.to_json(orient="records")),
