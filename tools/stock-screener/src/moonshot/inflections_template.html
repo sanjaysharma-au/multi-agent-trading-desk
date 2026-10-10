@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Inflections Report</title>
+<title>Proven, Not Yet Priced</title>
 <style>
 :root {
   color-scheme: light;
@@ -57,7 +57,10 @@ aside#list-panel td.name { max-width: none; }
   .page { flex-direction: column; }
   aside#chat-card, aside#list-panel { width: 100%; flex: none; position: static; max-height: none; order: 0; }
 }
-h1 { font-size: 22px; margin: 0 0 4px; }
+h1 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 6px; }
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#theme-toggle { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+#theme-toggle:hover { background: var(--hover); color: var(--ink); }
 h2 { font-size: 15px; margin: 0 0 2px; }
 .sub { color: var(--ink-2); margin: 0 0 20px; }
 .note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
@@ -167,7 +170,10 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
   <button class="export" id="export-csv" type="button">Export CSV</button>
 </aside>
 <main>
-  <h1>Inflections Report</h1>
+  <div class="title-row">
+    <h1>Proven, Not Yet Priced</h1>
+    <button type="button" id="theme-toggle"></button>
+  </div>
   <p class="sub" id="sub"></p>
   <section class="tiles" id="tiles"></section>
 
@@ -248,6 +254,23 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
   </form>
 </aside>
 </div>
+<script>
+const THEME_KEY = "inflections-theme";
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+const currentTheme = () => document.documentElement.dataset.theme || (systemDark.matches ? "dark" : "light");
+const syncToggleLabel = () => {
+  document.getElementById("theme-toggle").textContent = currentTheme() === "dark" ? "Light mode" : "Dark mode";
+};
+try { const saved = localStorage.getItem(THEME_KEY); if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved; } catch (e) {}
+syncToggleLabel();
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+  syncToggleLabel();
+});
+systemDark.addEventListener("change", syncToggleLabel);
+</script>
 <script>
 const DATA = /*DATA*/null;
 const LISTS = { crossings: DATA.crossings || [], failures: DATA.failures || [] };
