@@ -39,6 +39,14 @@ def sic_for_ticker(ticker: str, sec_dir: Path, ciks: dict[str, int]) -> str:
     return json.loads(path.read_text()).get("sic") or ""
 
 
+ETF_NAMES = {
+    "IGV": "Software", "SOXX": "Semiconductors", "XLK": "Technology", "XLV": "Health Care", "XLF": "Financials",
+    "XLE": "Energy", "XLI": "Industrials", "XLC": "Communication Services", "XLY": "Consumer Discretionary",
+    "XLP": "Consumer Staples", "XLB": "Materials", "XLU": "Utilities", "XLRE": "Real Estate", "GDX": "Gold Miners",
+    "SPY": "S&P 500",
+}
+
+
 def etf_for_sic(sic: str | None) -> str:
     sic = sic or ""
     for n in range(len(sic), 0, -1):

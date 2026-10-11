@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -13,7 +14,8 @@ from .fundamentals import cik_map
 from .report import _fundamentals_payload, _weekly_series, rise_pct
 from .depressed import load_params
 from .research import load_research
-from .sector import etf_for_sic, load_etf_series, sic_for_ticker
+from .profile import load_profile
+from .sector import ETF_NAMES, etf_for_sic, load_etf_series, sic_for_ticker
 from .valuation import load_valuation
 
 TEMPLATE = Path(__file__).with_name("inflections_template.html")
@@ -166,10 +168,20 @@ def build_inflections_report(
         _add_rise_columns(crossings, series, fund, data_dir)
 
     spy = load_etf_series("SPY", data_dir / "sector")
+    sec_dir, ciks = data_dir / "sec", cik_map(data_dir / "sec")
+    sector_etf = {t: etf_for_sic(sic_for_ticker(t, sec_dir, ciks)) for t in all_tickers}
+    etfs = {e: s for e in sorted(set(sector_etf.values()) - {"SPY"}) if (s := load_etf_series(e, data_dir / "sector"))}
+    print(f"Loading profiles for {len(all_tickers)} tickers...", file=sys.stderr)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        profiles = dict(zip(all_tickers, pool.map(lambda t: load_profile(t, data_dir, ciks), all_tickers)))
     research = {t: r for t in all_tickers if (r := load_research(t, data_dir)) and "skipped" not in r}
     payload = {
         "page": page,
         "benchmark": {"name": "S&P 500 (SPY)", **spy} if spy else {},
+        "etfs": etfs,
+        "etf_names": ETF_NAMES,
+        "sector_etf": sector_etf,
+        "profiles": profiles,
         "params": load_params(crossings_csv) if page == "depressed" and crossings_csv else {},
         "snapshots": snapshots,
         "research": research,

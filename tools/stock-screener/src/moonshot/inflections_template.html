@@ -17,6 +17,7 @@
   --border: rgba(11,11,11,0.10);
   --series-1: #2a78d6;
   --series-2: #eb6834;
+  --sector: #1a9a8a;
   --select: #eb6834;
   --band: rgba(42,120,214,0.10);
   --up: #006300;
@@ -30,7 +31,7 @@
     color-scheme: dark;
     --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-    --series-1: #3987e5; --series-2: #d95926; --select: #d95926; --band: rgba(57,135,229,0.16);
+    --series-1: #3987e5; --series-2: #d95926; --sector: #3cc4b0; --select: #d95926; --band: rgba(57,135,229,0.16);
     --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
   }
 }
@@ -38,7 +39,7 @@
   color-scheme: dark;
   --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
-  --series-1: #3987e5; --series-2: #d95926; --select: #d95926; --band: rgba(57,135,229,0.16);
+  --series-1: #3987e5; --series-2: #d95926; --sector: #3cc4b0; --select: #d95926; --band: rgba(57,135,229,0.16);
   --up: #0ca30c; --down: #e66767; --up-bg: rgba(12,163,12,0.16); --down-bg: rgba(230,103,103,0.16); --hover: rgba(255,255,255,0.05);
 }
 * { box-sizing: border-box; }
@@ -58,6 +59,8 @@ aside#list-panel td.name { max-width: none; }
   aside#chat-card, aside#list-panel { width: 100%; flex: none; position: static; max-height: none; order: 0; }
 }
 h1 { font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; margin: 0 0 6px; }
+.profile { margin: 2px 0 10px; color: var(--ink-2); }
+.profile b { color: var(--ink); font-weight: 600; }
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 #theme-toggle { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink-2); cursor: pointer; }
 #theme-toggle:hover { background: var(--hover); color: var(--ink); }
@@ -132,6 +135,7 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
 .chat-msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); color: var(--ink); }
 .chat-msg.error { align-self: flex-start; background: var(--down-bg); color: var(--down); border: 1px solid var(--down); }
 .chat-msg.pending { align-self: flex-start; color: var(--muted); font-style: italic; background: none; border: none; padding: 0 12px; }
+.chat-status { color: var(--muted); font-style: italic; margin-top: 6px; }
 .chat-empty { color: var(--muted); font-size: 13px; padding: 4px 2px; }
 .chat-form { display: flex; gap: 8px; }
 .chat-form input { flex: 1; font: inherit; font-size: 13.5px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--axis); background: var(--surface); color: var(--ink); }
@@ -185,6 +189,7 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
         <div class="moonshot-badge" id="moonshot-badge" hidden></div>
       </div>
     </div>
+    <p class="note profile" id="detail-profile" hidden></p>
     <p class="note score-rationale" id="score-rationale" hidden></p>
     <div class="moonshot-trend" id="moonshot-trend" hidden></div>
     <p class="note score-rationale" id="moonshot-rationale" hidden></p>
@@ -534,9 +539,10 @@ function renderChat(ticker) {
   if (!msgs.length) {
     log.innerHTML = `<p class="chat-empty">No questions yet. Ask anything about ${ticker}'s fundamentals or moonshot pipeline scores above.</p>`;
   } else {
-    log.innerHTML = msgs.map(m => `<div class="chat-msg ${m.role}">${esc(m.text)}</div>`).join("");
+    log.innerHTML = msgs.map(m => m.role === "assistant" && !m.text && m.status
+      ? `<div class="chat-msg pending">${esc(m.status)}</div>`
+      : `<div class="chat-msg ${m.role}">${esc(m.text)}${m.role === "assistant" && m.status ? `<div class="chat-status">${esc(m.status)}</div>` : ""}</div>`).join("");
   }
-  if (chatBusy) log.insertAdjacentHTML("beforeend", '<div class="chat-msg pending">Thinking…</div>');
   log.scrollTop = log.scrollHeight;
   document.getElementById("chat-input").disabled = chatBusy;
   document.getElementById("chat-send").disabled = chatBusy;
@@ -546,17 +552,51 @@ function renderChat(ticker) {
 async function sendChat(ticker, question) {
   CHAT_HISTORY[ticker] = CHAT_HISTORY[ticker] || [];
   CHAT_HISTORY[ticker].push({ role: "user", text: question });
+  const msg = { role: "assistant", text: "", status: "Thinking…" };
+  CHAT_HISTORY[ticker].push(msg);
   chatBusy = true;
-  renderChat(selected);
+  let queued = false;
+  const refresh = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; if (selected === ticker) renderChat(ticker); });
+  };
+  refresh();
+  const fail = text => {
+    const history = CHAT_HISTORY[ticker];
+    if (!msg.text) history.splice(history.indexOf(msg), 1, { role: "error", text });
+    else { msg.status = ""; history.push({ role: "error", text }); }
+  };
+  let finished = false;
   try {
     const r = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ticker, question }),
     });
-    const j = await r.json();
-    CHAT_HISTORY[ticker].push(j.ok ? { role: "assistant", text: j.answer } : { role: "error", text: j.error || "something went wrong" });
+    if (!r.ok || !r.body) throw new Error("bad response");
+    const reader = r.body.getReader(), decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "delta") { msg.text += ev.text; msg.status = ""; }
+        else if (ev.type === "status") msg.status = ev.text;
+        else if (ev.type === "reset") msg.text = "";
+        else if (ev.type === "done") { msg.text = ev.answer || msg.text; msg.status = ""; finished = true; }
+        else if (ev.type === "error") { fail(ev.error || "something went wrong"); finished = true; }
+        refresh();
+      }
+    }
+    if (!finished) fail("the connection closed before the answer finished");
   } catch (e) {
-    CHAT_HISTORY[ticker].push({ role: "error", text: "could not reach the server" });
+    if (!finished) fail("could not reach the server");
   }
   chatBusy = false;
   renderChat(selected);
@@ -718,14 +758,24 @@ function renderResearchCard(r) {
 }
 
 const BENCH = DATA.benchmark || {};
+const ETFS = DATA.etfs || {}, ETF_NAMES = DATA.etf_names || {}, SECTOR_ETF = DATA.sector_etf || {}, PROFILES = DATA.profiles || {};
+function renderProfile(ticker) {
+  const box = document.getElementById("detail-profile"), p = PROFILES[ticker] || {};
+  const head = [p.sector, p.industry].filter(Boolean).join(" · ");
+  if (!head && !p.summary) { box.hidden = true; return; }
+  box.hidden = false;
+  box.replaceChildren();
+  if (head) { const b = document.createElement("b"); b.textContent = head; box.appendChild(b); }
+  if (p.summary) box.appendChild(document.createTextNode((head ? " — " : "") + p.summary));
+}
 function eventLabel(r, kind) {
   if (kind === "snapshot" && r.as_of) return r.as_of;
   if (kind === "crossing" && PAGE === "inflections" && r.crossing_period_end) return r.crossing_period_end;
   return "the chart's first date";
 }
-function benchmarkLine(t, p, rebaseI) {
-  if (!BENCH.d || !BENCH.d.length) return null;
-  const bt = BENCH.d.map(d => d * DAY), bp = BENCH.p;
+function benchmarkLine(t, p, rebaseI, bench = BENCH) {
+  if (!bench || !bench.d || !bench.d.length) return null;
+  const bt = bench.d.map(d => d * DAY), bp = bench.p;
   const at = target => {
     if (target < bt[0]) return null;
     let lo = 0, hi = bt.length - 1;
@@ -744,7 +794,7 @@ function renderDetail() {
   const r = selected ? findRow(selected) : null;
   const title = document.getElementById("detail-title");
   const legend = document.getElementById("detail-legend");
-  if (!r) { title.textContent = "Price history"; renderScoreBadge(null); renderMoonshotBadge(null); renderMoonshotCard(null); renderResearchCard(null); renderRunCtl(); renderChat(null); renderFund(null); renderQuarterTable(null); return; }
+  if (!r) { title.textContent = "Price history"; document.getElementById("detail-profile").hidden = true; renderScoreBadge(null); renderMoonshotBadge(null); renderMoonshotCard(null); renderResearchCard(null); renderRunCtl(); renderChat(null); renderFund(null); renderQuarterTable(null); return; }
   const kind = rowKind(r.ticker);
   title.textContent = `${r.ticker}${r.name ? " · " + r.name : ""}`;
   renderScoreBadge(r);
@@ -753,11 +803,13 @@ function renderDetail() {
   renderResearchCard(r);
   renderRunCtl();
   renderChat(r.ticker);
+  renderProfile(r.ticker);
   const s = series[r.ticker];
   const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
   legend.innerHTML = '<span><i style="background:var(--series-1)"></i>Adjusted close</span>' +
     (BENCH.d ? `<span><i style="background:var(--muted)"></i>${BENCH.name}, rebased to the stock on ${eventLabel(r, kind)}</span>` : "") +
+    ((SECTOR_ETF[r.ticker] || r.sector_etf) && (SECTOR_ETF[r.ticker] || r.sector_etf) !== "SPY" && ETFS[SECTOR_ETF[r.ticker] || r.sector_etf] ? `<span><i style="background:var(--sector)"></i>${ETF_NAMES[SECTOR_ETF[r.ticker] || r.sector_etf] || "Sector"} ETF (${SECTOR_ETF[r.ticker] || r.sector_etf}), same rebasing</span>` : "") +
     (kind === "crossing" && PAGE === "inflections" ? '<span><i style="background:var(--select)"></i>Crossing quarter</span>' : "") +
     (kind === "snapshot" ? '<span><i style="background:var(--select)"></i>Screen date</span>' : "");
   if (!s || !s.d.length) {
@@ -771,7 +823,10 @@ function renderDetail() {
   const nearest = (target) => { let lo = 0, hi = t.length - 1; while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] < target) lo = mid; else hi = mid; } return Math.abs(t[lo] - target) < Math.abs(t[hi] - target) ? lo : hi; };
   const rebaseI = eventT != null && eventT >= t[0] && eventT <= t[t.length - 1] ? nearest(eventT) : 0;
   const bm = benchmarkLine(t, p, rebaseI);
-  const pos = p.filter(v => v > 0).concat(bm ? bm.filter(v => v > 0) : []);
+  const etf = SECTOR_ETF[r.ticker] || r.sector_etf;
+  const sm = etf && etf !== "SPY" ? benchmarkLine(t, p, rebaseI, ETFS[etf]) : null;
+  const etfLabel = etf ? `${ETF_NAMES[etf] || "Sector"} ETF (${etf})` : "Sector ETF";
+  const pos = p.filter(v => v > 0).concat(bm ? bm.filter(v => v > 0) : [], sm ? sm.filter(v => v > 0) : []);
   const y0 = Math.min(...pos) * 0.85, y1 = Math.max(...pos) * 1.15;
   const X = linScale(t[0], t[t.length - 1], m.l, W - m.r), Y = logScale(y0, y1, H - m.b, m.t);
   for (const v of logTicks(y0, y1)) {
@@ -785,6 +840,11 @@ function renderDetail() {
     el("line", { x1: X(ta), x2: X(ta), y1: H - m.b, y2: H - m.b - 6, stroke: "var(--muted)", "stroke-width": 1.5 }, svg);
   }
 
+  if (sm) {
+    let sd = "";
+    sm.forEach((v, i) => { if (v > 0) sd += (sd ? "L" : "M") + X(t[i]).toFixed(1) + "," + Y(v).toFixed(1); });
+    el("path", { d: sd, fill: "none", stroke: "var(--sector)", "stroke-width": 1.5, "stroke-dasharray": "2 3", "stroke-linejoin": "round" }, svg);
+  }
   if (bm) {
     let bd = "";
     bm.forEach((v, i) => { if (v > 0) bd += (bd ? "L" : "M") + X(t[i]).toFixed(1) + "," + Y(v).toFixed(1); });
@@ -824,6 +884,10 @@ function renderDetail() {
     if (bm && bm[i] > 0) {
       const rel = (p[i] / bm[i] - 1) * 100;
       rows.push(["S&P 500, rebased", fmtPrice(bm[i])], [`vs S&P since ${fmtDate(t[rebaseI])}`, (rel > 0 ? "+" : "") + rel.toFixed(0) + "%"]);
+    }
+    if (sm && sm[i] > 0) {
+      const rel = (p[i] / sm[i] - 1) * 100;
+      rows.push([`${etf}, rebased`, fmtPrice(sm[i])], [`vs ${etf} since ${fmtDate(t[rebaseI])}`, (rel > 0 ? "+" : "") + rel.toFixed(0) + "%"]);
     }
     tipShow(tip, plot, cx * b.width / W, cy * b.height / H, rows);
   });

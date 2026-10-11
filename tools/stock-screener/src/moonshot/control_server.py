@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
 import re
 import signal
 import subprocess
@@ -87,7 +88,10 @@ CHAT_SYSTEM_PROMPT = (
     "citations, and URLs."
 )
 CHAT_ALLOWED_TOOLS = ["WebSearch", "WebFetch"]
-CLAUDE_CHAT_TIMEOUT_SECONDS = 180
+CHAT_IDLE_TIMEOUT_SECONDS = 180
+CHAT_MAX_SECONDS = 900
+CHAT_HEARTBEAT_SECONDS = 10
+TOOL_STATUS = {"WebSearch": "Searching the web…", "WebFetch": "Reading a web page…"}
 
 
 def _build_ticker_context(ticker: str, crossings_csv: Path | None, failures_csv: Path | None,
@@ -143,14 +147,18 @@ class ChatStore:
         self.sessions: dict[str, str] = {}
         self.lock = threading.Lock()
 
-    def ask(self, ticker: str, question: str, context_fn) -> dict:
+    def stream(self, ticker: str, question: str, context_fn):
+        """Yield events as the claude CLI works: status, reset (a tool call started, so any text so far
+        was preamble), delta (answer text), ping (keepalive), then done or error. The run is stopped if
+        the CLI goes quiet for CHAT_IDLE_TIMEOUT_SECONDS or runs past CHAT_MAX_SECONDS, not on a fixed
+        deadline, so a long web search that keeps producing output is not cut off."""
         ticker = ticker.upper()
         with self.lock:
             session_id = self.sessions.get(ticker)
         cmd = [
             "claude", "-p",
             (context_fn(ticker) + "\n\nQuestion: " + question) if session_id is None else question,
-            "--output-format", "json",
+            "--output-format", "stream-json", "--verbose", "--include-partial-messages",
             "--restricted", "--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit",
             "--allowedTools", *CHAT_ALLOWED_TOOLS,
             "--permission-prompts", "none",
@@ -161,20 +169,65 @@ class ChatStore:
         else:
             cmd += ["--resume", session_id]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=CLAUDE_CHAT_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "claude CLI timed out"}
-        if result.returncode != 0:
-            return {"ok": False, "error": result.stderr.strip() or result.stdout.strip() or "claude CLI failed"}
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        except OSError as exc:
+            yield {"type": "error", "error": f"could not start the claude CLI: {exc}"}
+            return
+        lines: queue.Queue = queue.Queue()
+        errors: list[str] = []
+
+        def pump_stdout():
+            for line in proc.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        threading.Thread(target=pump_stdout, daemon=True).start()
+        threading.Thread(target=lambda: errors.append(proc.stderr.read()), daemon=True).start()
+        started = last_output = time.monotonic()
+        final = None
         try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return {"ok": False, "error": "could not parse claude CLI output"}
-        if payload.get("is_error"):
-            return {"ok": False, "error": payload.get("result") or "claude CLI reported an error"}
-        with self.lock:
-            self.sessions[ticker] = payload.get("session_id", session_id)
-        return {"ok": True, "answer": payload.get("result", "")}
+            while True:
+                try:
+                    line = lines.get(timeout=CHAT_HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    now = time.monotonic()
+                    if now - last_output > CHAT_IDLE_TIMEOUT_SECONDS:
+                        yield {"type": "error", "error": f"no output from claude for {CHAT_IDLE_TIMEOUT_SECONDS}s; stopped"}
+                        return
+                    if now - started > CHAT_MAX_SECONDS:
+                        yield {"type": "error", "error": f"stopped after {CHAT_MAX_SECONDS // 60} minutes"}
+                        return
+                    yield {"type": "ping"}
+                    continue
+                if line is None:
+                    break
+                last_output = time.monotonic()
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "result":
+                    final = event
+                elif event.get("type") == "stream_event":
+                    inner = event.get("event", {})
+                    block = inner.get("content_block", {})
+                    delta = inner.get("delta", {})
+                    if inner.get("type") == "content_block_start" and block.get("type") == "tool_use":
+                        yield {"type": "reset"}
+                        yield {"type": "status", "text": TOOL_STATUS.get(block.get("name"), "Working…")}
+                    elif inner.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+                        yield {"type": "delta", "text": delta.get("text", "")}
+            proc.wait(timeout=10)
+            if final is None or final.get("is_error"):
+                detail = (final or {}).get("result") or (errors[0].strip() if errors else "") or "claude CLI failed"
+                yield {"type": "error", "error": detail}
+                return
+            with self.lock:
+                self.sessions[ticker] = final.get("session_id", session_id)
+            yield {"type": "done", "answer": final.get("result", "")}
+        finally:
+            if proc.poll() is None:
+                proc.kill()
 
     def reset(self, ticker: str) -> None:
         with self.lock:
@@ -359,7 +412,20 @@ def make_handler(store: JobStore, report_html: bytes, moonshot_dir: Path, chat: 
                 if not ticker or not question:
                     self._json({"ok": False, "error": "ticker and question required"}, 400)
                     return
-                self._json(chat.ask(ticker, question, context_fn))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                events = chat.stream(ticker, question, context_fn)
+                try:
+                    for event in events:
+                        self.wfile.write((json.dumps(event) + "\n").encode())
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                finally:
+                    events.close()
             elif path == "/api/chat/reset":
                 if not ticker:
                     self._json({"ok": False, "error": "ticker required"}, 400)
