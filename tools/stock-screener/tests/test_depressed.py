@@ -47,3 +47,7 @@ def test_snapshot_needs_recent_quarters_and_cash_flow():
     q.loc[7, "free_cash_flow"] = np.nan
     assert fundamentals_snapshot(q, pd.Timestamp("2026-09-30")) is None
     assert fundamentals_snapshot(quarters([100] * 4, [5] * 4, [10] * 4, n=4), pd.Timestamp("2026-09-30")) is None
+
+
+def test_zero_price_history_is_rejected_instead_of_dividing_by_zero():
+    assert price_metrics(prices([0.0] * 400)) is None

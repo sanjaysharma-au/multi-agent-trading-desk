@@ -147,7 +147,7 @@ th.why, td.why { text-align: left; white-space: normal; min-width: 280px; max-wi
 .qwrap tr.inrun td { background: var(--band); }
 .qwrap a { color: var(--series-1); text-decoration: none; margin-right: 10px; }
 .qwrap a:hover { text-decoration: underline; }
-.tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .tabs button { font: inherit; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface); color: var(--ink-2); cursor: pointer; }
 .tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--series-1); background: var(--band); }
@@ -277,6 +277,12 @@ const LISTS = { crossings: DATA.crossings || [], failures: DATA.failures || [] }
 const PAGE = DATA.page || "inflections";
 const PARAMS = DATA.params || {};
 if (PAGE === "depressed") {
+  for (const snap of (DATA.snapshots || [])) {
+    const b = document.createElement("button");
+    b.dataset.t = "snap" + snap.key; b.setAttribute("aria-pressed", "false");
+    b.innerHTML = `${snap.key} <span class="n" id="n-snap${snap.key}"></span>`;
+    document.getElementById("tabs").appendChild(b);
+  }
   document.title = "Beaten Down, Still Sound";
   document.querySelector("h1").textContent = document.title;
   document.querySelector('#tabs button[data-t="crossings"]').firstChild.textContent = "Depressed ";
@@ -296,7 +302,9 @@ function applyMoonshot(r) {
   [r.moonshot_quarter, r.moonshot_proximity, r.moonshot_momentum, r.moonshot_ambition,
    r.moonshot_runway, r.moonshot_tier, r.moonshot_stage, r.moonshot_rationale] = last;
 }
-for (const list of [LISTS.crossings, LISTS.failures]) for (const r of list) applyMoonshot(r);
+const SNAPSHOTS = DATA.snapshots || [];
+for (const snap of SNAPSHOTS) LISTS["snap" + snap.key] = snap.rows;
+for (const list of Object.values(LISTS)) for (const r of list) applyMoonshot(r);
 const tierColor = t => ({ T4: "var(--up)", T3: "var(--select)" }[t] || "var(--muted)");
 const DAY = 86400000;
 const NS = "http://www.w3.org/2000/svg";
@@ -363,23 +371,44 @@ function tipShow(tip, plot, x, y, lines) {
   tip.style.top = Math.max(0, y - tip.offsetHeight - 10) + "px";
 }
 function findRow(ticker) {
-  return LISTS.crossings.find(r => r.ticker === ticker) || LISTS.failures.find(r => r.ticker === ticker);
+  const here = (LISTS[activeTab] || []).find(r => r.ticker === ticker);
+  if (here) return here;
+  for (const list of Object.values(LISTS)) { const r = list.find(x => x.ticker === ticker); if (r) return r; }
 }
 function rowKind(ticker) {
+  if (activeTab.startsWith("snap")) return "snapshot";
   return LISTS.crossings.some(r => r.ticker === ticker) ? "crossing" : "failure";
 }
 
 // ---------- header ----------
+const sgn = v => v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%";
+const share = (rows, key) => { const v = rows.map(r => r[key]).filter(x => x != null); return v.length ? Math.round(100 * v.filter(x => x > 0).length / v.length) + "%" : "–"; };
 function renderHeaderDepressed() {
-  const rows = LISTS.crossings;
-  document.getElementById("sub").textContent =
-    `${rows.length} stocks at least ${PARAMS.min_drawdown ?? "?"}% below their 52-week high that still show GAAP profit, positive free cash flow and revenue growth of at least ${PARAMS.min_growth ?? "?"}% (trailing 12 months, SEC filings) · generated ${DATA.generated}`;
-  const tiles = [
-    ["Stocks found", String(rows.length)],
-    ["Median drawdown", rows.length ? "-" + Math.round(median(rows.map(r => r.dd_52w_pct))) + "%" : "–"],
-    ["Median revenue growth", rows.length ? "+" + Math.round(median(rows.map(r => r.revenue_growth_pct))) + "%" : "–"],
-    ["Median P/S vs 3-year median", (() => { const v = median(rows.map(r => r.ps_vs_3y_median_pct).filter(x => x != null)); return v == null ? "–" : (v > 0 ? "+" : "") + Math.round(v) + "%"; })()],
-  ];
+  const snap = activeTab.startsWith("snap") ? SNAPSHOTS.find(s => "snap" + s.key === activeTab) : null;
+  const rows = snap ? snap.rows : LISTS.crossings;
+  document.getElementById("tiles").replaceChildren();
+  let tiles;
+  if (snap) {
+    const bench = (snap.params.benchmark || {}).SPY || {};
+    document.getElementById("sub").textContent =
+      `As of ${snap.as_of}: ${rows.length} stocks passed the same screen using only prices and filings available then. Returns run from that day's close. S&P 500 (SPY) over the same periods: 6m ${sgn(bench.ret_6m)}, 12m ${sgn(bench.ret_12m)}, 24m ${sgn(bench.ret_24m)}, to now ${sgn(bench.ret_now)}. The universe is today's listings, so companies delisted since are missing and results look better than they would have.`;
+    tiles = [
+      ["Stocks found", String(rows.length)],
+      ["Median 12-month return", sgn(median(rows.map(r => r.ret_12m)))],
+      ["Up after 12 months", share(rows, "ret_12m")],
+      ["Median 24-month return", sgn(median(rows.map(r => r.ret_24m)))],
+      ["Median return to now", sgn(median(rows.map(r => r.ret_now)))],
+    ];
+  } else {
+    document.getElementById("sub").textContent =
+      `${rows.length} stocks at least ${PARAMS.min_drawdown ?? "?"}% below their 52-week high that still show GAAP profit, positive free cash flow and revenue growth of at least ${PARAMS.min_growth ?? "?"}% (trailing 12 months, SEC filings) · generated ${DATA.generated}`;
+    tiles = [
+      ["Stocks found", String(rows.length)],
+      ["Median drawdown", rows.length ? "-" + Math.round(median(rows.map(r => r.dd_52w_pct))) + "%" : "–"],
+      ["Median revenue growth", rows.length ? "+" + Math.round(median(rows.map(r => r.revenue_growth_pct))) + "%" : "–"],
+      ["Median P/S vs 3-year median", sgn(median(rows.map(r => r.ps_vs_3y_median_pct).filter(x => x != null)))],
+    ];
+  }
   const box = document.getElementById("tiles");
   for (const [label, value] of tiles) {
     const t = document.createElement("div"); t.className = "tile";
@@ -387,7 +416,8 @@ function renderHeaderDepressed() {
     const v = document.createElement("div"); v.className = "value"; v.textContent = value;
     t.append(l, v); box.appendChild(t);
   }
-  document.getElementById("n-crossings").textContent = `(${rows.length})`;
+  document.getElementById("n-crossings").textContent = `(${LISTS.crossings.length})`;
+  for (const s of SNAPSHOTS) document.getElementById("n-snap" + s.key).textContent = `(${s.rows.length})`;
 }
 function renderHeader() {
   if (PAGE === "depressed") return renderHeaderDepressed();
@@ -687,6 +717,27 @@ function renderResearchCard(r) {
   });
 }
 
+const BENCH = DATA.benchmark || {};
+function eventLabel(r, kind) {
+  if (kind === "snapshot" && r.as_of) return r.as_of;
+  if (kind === "crossing" && PAGE === "inflections" && r.crossing_period_end) return r.crossing_period_end;
+  return "the chart's first date";
+}
+function benchmarkLine(t, p, rebaseI) {
+  if (!BENCH.d || !BENCH.d.length) return null;
+  const bt = BENCH.d.map(d => d * DAY), bp = BENCH.p;
+  const at = target => {
+    if (target < bt[0]) return null;
+    let lo = 0, hi = bt.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (bt[mid] <= target) lo = mid; else hi = mid; }
+    return bt[hi] <= target ? bp[hi] : bp[lo];
+  };
+  const base = at(t[rebaseI]);
+  if (!base || !(p[rebaseI] > 0)) return null;
+  const factor = p[rebaseI] / base;
+  return t.map(ti => { const v = at(ti); return v ? v * factor : 0; });
+}
+
 function renderDetail() {
   const plot = document.getElementById("detail");
   plot.replaceChildren();
@@ -706,7 +757,9 @@ function renderDetail() {
   const W = plot.clientWidth, H = 320, m = { t: 14, r: 14, b: 34, l: 54 };
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Price history for ${r.ticker}` }, plot);
   legend.innerHTML = '<span><i style="background:var(--series-1)"></i>Adjusted close</span>' +
-    (kind === "crossing" && PAGE === "inflections" ? '<span><i style="background:var(--select)"></i>Crossing quarter</span>' : "");
+    (BENCH.d ? `<span><i style="background:var(--muted)"></i>${BENCH.name}, rebased to the stock on ${eventLabel(r, kind)}</span>` : "") +
+    (kind === "crossing" && PAGE === "inflections" ? '<span><i style="background:var(--select)"></i>Crossing quarter</span>' : "") +
+    (kind === "snapshot" ? '<span><i style="background:var(--select)"></i>Screen date</span>' : "");
   if (!s || !s.d.length) {
     detailScale = { ts: null, tp: null };
     renderFund(r); renderQuarterTable(r);
@@ -714,7 +767,11 @@ function renderDetail() {
     return;
   }
   const t = s.d.map(d => d * DAY), p = s.p;
-  const pos = p.filter(v => v > 0);
+  const eventT = kind === "snapshot" && r.as_of ? Date.parse(r.as_of) : (kind === "crossing" && r.crossing_period_end ? Date.parse(r.crossing_period_end) : null);
+  const nearest = (target) => { let lo = 0, hi = t.length - 1; while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] < target) lo = mid; else hi = mid; } return Math.abs(t[lo] - target) < Math.abs(t[hi] - target) ? lo : hi; };
+  const rebaseI = eventT != null && eventT >= t[0] && eventT <= t[t.length - 1] ? nearest(eventT) : 0;
+  const bm = benchmarkLine(t, p, rebaseI);
+  const pos = p.filter(v => v > 0).concat(bm ? bm.filter(v => v > 0) : []);
   const y0 = Math.min(...pos) * 0.85, y1 = Math.max(...pos) * 1.15;
   const X = linScale(t[0], t[t.length - 1], m.l, W - m.r), Y = logScale(y0, y1, H - m.b, m.t);
   for (const v of logTicks(y0, y1)) {
@@ -728,12 +785,17 @@ function renderDetail() {
     el("line", { x1: X(ta), x2: X(ta), y1: H - m.b, y2: H - m.b - 6, stroke: "var(--muted)", "stroke-width": 1.5 }, svg);
   }
 
+  if (bm) {
+    let bd = "";
+    bm.forEach((v, i) => { if (v > 0) bd += (bd ? "L" : "M") + X(t[i]).toFixed(1) + "," + Y(v).toFixed(1); });
+    el("path", { d: bd, fill: "none", stroke: "var(--muted)", "stroke-width": 1.5, "stroke-dasharray": "5 3", "stroke-linejoin": "round" }, svg);
+  }
   let d = "";
   p.forEach((v, i) => { if (v > 0) d += (d ? "L" : "M") + X(t[i]).toFixed(1) + "," + Y(v).toFixed(1); });
   el("path", { d, fill: "none", stroke: "var(--series-1)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
 
   // For a crossing, mark the crossing quarter on the price chart; a failure has no such event to mark.
-  const tc = kind === "crossing" && r.crossing_period_end ? Date.parse(r.crossing_period_end) : null;
+  const tc = eventT;
   if (tc != null && tc >= t[0] && tc <= t[t.length - 1]) {
     let lo = 0, hi = t.length - 1;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (t[mid] < tc) lo = mid; else hi = mid; }
@@ -741,7 +803,7 @@ function renderDetail() {
     const cx = X(t[i]), cy = Y(p[i]);
     el("circle", { cx, cy, r: 5, fill: "var(--select)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
     const flip = cx > W - m.r - 140;
-    txt(svg, cx + (flip ? -9 : 9), cy - 8, `Crossed ${r.crossing_period_end}`, { class: "lbl", "text-anchor": flip ? "end" : "start" });
+    txt(svg, cx + (flip ? -9 : 9), cy - 8, kind === "snapshot" ? `Screened ${r.as_of}` : `Crossed ${r.crossing_period_end}`, { class: "lbl", "text-anchor": flip ? "end" : "start" });
   }
   detailScale = { t0: t[0], t1: t[t.length - 1], W, m: { ...m }, ts: tc, tp: tc != null ? t[t.length - 1] : null };
 
@@ -758,7 +820,12 @@ function renderDetail() {
     const cx = X(t[i]), cy = Y(p[i]);
     cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
     dot.setAttribute("cx", cx); dot.setAttribute("cy", cy); dot.setAttribute("visibility", "visible");
-    tipShow(tip, plot, cx * b.width / W, cy * b.height / H, [["Week of " + fmtDate(t[i])], ["adj. close", fmtPrice(p[i])]]);
+    const rows = [["Week of " + fmtDate(t[i])], ["adj. close", fmtPrice(p[i])]];
+    if (bm && bm[i] > 0) {
+      const rel = (p[i] / bm[i] - 1) * 100;
+      rows.push(["S&P 500, rebased", fmtPrice(bm[i])], [`vs S&P since ${fmtDate(t[rebaseI])}`, (rel > 0 ? "+" : "") + rel.toFixed(0) + "%"]);
+    }
+    tipShow(tip, plot, cx * b.width / W, cy * b.height / H, rows);
   });
   svg.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); });
   renderFund(r);
@@ -913,6 +980,23 @@ if (PAGE === "depressed") {
   ];
   TABLE_NOTES.crossings = "Sorted by drawdown from the 52-week high, deepest first. Down and 3y are the fall from the 52-week and 3-year highs of adjusted close. Rev g is trailing-12-month revenue growth against the 12 months before; FCF % is trailing free cash flow over revenue. P/S vs 3y compares price-to-sales now with its median over the last three years of earnings announcements: a large negative number means the multiple has compressed. Pharma and biotech are excluded. Click any header to re-sort.";
   sortKey.crossings = "dd_52w_pct"; sortDir.crossings = -1;
+  const pctCol = (key, label) => [key, label, "num", sgn];
+  const SNAP_COLS = [
+    ["ticker", "Ticker", "str"], ["name", "Name", "str", trimName],
+    ["dd_52w_pct", "Down", "num", v => v == null ? "–" : "-" + Math.round(v) + "%"],
+    pctCol("ret_6m", "6m"), pctCol("ret_12m", "12m"), pctCol("ret_24m", "24m"), pctCol("ret_now", "Now"),
+    pctCol("ret_12m_vs_sector", "12m vs sector"),
+    pctCol("revenue_growth_pct", "Rev g"),
+    ["fcf_margin_pct", "FCF %", "num", v => v == null ? "–" : Math.round(v) + "%"],
+    ["ps_vs_3y_median_pct", "P/S vs 3y", "num", sgn],
+    ["moonshot_tier", "Tier", "str", v => v ?? "–"],
+    ["moonshot_proximity", "Prox.", "num", v => v == null ? "–" : v],
+  ];
+  for (const snap of SNAPSHOTS) {
+    COLS["snap" + snap.key] = SNAP_COLS;
+    TABLE_NOTES["snap" + snap.key] = `Stocks that passed the same screen on ${snap.as_of}, using only data available then. Down is the fall from the 52-week high on that day; 6m, 12m, 24m and Now are the stock's return from that day's close (blank if the horizon hasn't been reached); 12m vs sector subtracts the sector ETF's return. Rev g, FCF % and P/S vs 3y are as of that day. Sorted by drawdown, deepest first; click any header to re-sort.`;
+    sortKey["snap" + snap.key] = "dd_52w_pct"; sortDir["snap" + snap.key] = -1;
+  }
 }
 let currentList = [];
 
@@ -980,6 +1064,10 @@ document.querySelectorAll("#tabs button").forEach(btn => btn.addEventListener("c
   activeTab = btn.dataset.t;
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
   filterText = ""; document.getElementById("search").value = "";
+  if (PAGE === "depressed") renderHeaderDepressed();
+  const first = (LISTS[activeTab] || [])[0];
+  if (first && !(LISTS[activeTab] || []).some(r => r.ticker === selected)) selected = first.ticker;
+  renderDetail();
   renderTable();
 }));
 document.getElementById("search").addEventListener("input", e => { filterText = e.target.value.trim().toLowerCase(); renderTable(); });

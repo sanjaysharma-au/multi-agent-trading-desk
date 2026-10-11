@@ -131,6 +131,8 @@ def _build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--min-growth", type=float, default=10.0, help="min trailing-12-month revenue growth %% (default 10)")
     dep.add_argument("--include-pharma", action="store_true", help="keep pharma/biotech (excluded by default)")
     dep.add_argument("--no-valuation", action="store_true", help="skip the price-to-sales history step")
+    dep.add_argument("--as-of", help="YYYY-MM-DD: run the same screen as it would have looked on that date, using only "
+                                       "prices and filings available then, and add forward returns (cached prices only)")
     dep.add_argument("--tickers", help="comma-separated tickers instead of the full US universe")
     dep.add_argument("--max-age", type=float, default=1, help="price cache max age in days (default 1; refreshes stale prices)")
     dep.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="cache directory (default: tools/stock-screener/data, regardless of cwd)")
@@ -466,20 +468,26 @@ def depressed(args: argparse.Namespace) -> int:
         universe["name"], universe["exchange"] = None, None
     else:
         universe = load_universe(args.data_dir / "universe", 1)
+    as_of = pd.Timestamp(args.as_of) if args.as_of else None
     df = run_screen(universe, args.data_dir, args.min_drawdown, args.min_price, args.min_dollar_volume,
-                    args.min_growth, args.max_age, args.include_pharma)
+                    args.min_growth, args.max_age, args.include_pharma, as_of)
     if df.empty:
         print("No stocks passed the screen.", file=sys.stderr)
         return 0
     if not args.no_valuation:
         print(f"{len(df)} passed; building price-to-sales history...", file=sys.stderr)
-        df = add_valuation_columns(df, args.data_dir)
-    out = args.out or DEFAULT_RESULTS_DIR / f"depressed_{dt.date.today():%Y%m%d}.csv"
+        df = add_valuation_columns(df, args.data_dir, refresh=as_of is None, as_of=as_of)
+    stem = f"depressed_asof_{as_of:%Y%m%d}" if as_of is not None else f"depressed_{dt.date.today():%Y%m%d}"
+    out = args.out or DEFAULT_RESULTS_DIR / f"{stem}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
-    write_params(out, {"min_drawdown": args.min_drawdown, "min_price": args.min_price,
-                       "min_dollar_volume": args.min_dollar_volume, "min_growth": args.min_growth,
-                       "include_pharma": args.include_pharma})
+    params = {"min_drawdown": args.min_drawdown, "min_price": args.min_price,
+              "min_dollar_volume": args.min_dollar_volume, "min_growth": args.min_growth,
+              "include_pharma": args.include_pharma}
+    if as_of is not None:
+        from .depressed import benchmark_returns
+        params.update(as_of=f"{as_of:%Y-%m-%d}", benchmark={"SPY": benchmark_returns(args.data_dir, as_of)})
+    write_params(out, params)
     cols = ["ticker", "dd_52w_pct", "dd_3y_pct", "revenue_growth_pct", "fcf_margin_pct", "ps_now", "ps_vs_3y_median_pct"]
     print(df[[c for c in cols if c in df.columns]].head(args.top).to_string(index=False))
     print(f"\n{len(df)} stocks written to {out}", file=sys.stderr)

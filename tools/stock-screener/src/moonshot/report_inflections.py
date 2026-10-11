@@ -123,6 +123,18 @@ def _add_rise_columns(crossings: pd.DataFrame, series: dict, fund: dict, data_di
     ]
 
 
+def _load_snapshots(current_csv: Path) -> list[dict]:
+    """Historical runs of the depressed screen (`moonshot depressed --as-of`) saved beside the current CSV."""
+    out = []
+    for path in sorted(current_csv.parent.glob("depressed_asof_*.csv")):
+        params = load_params(path)
+        rows = json.loads(pd.read_csv(path).to_json(orient="records"))
+        if rows:
+            out.append({"key": path.stem.removeprefix("depressed_asof_")[:4], "as_of": params.get("as_of"),
+                        "params": params, "rows": rows})
+    return out
+
+
 def build_inflections_report(
     crossings_csv: Path | None, failures_csv: Path | None, data_dir: Path, out: Path,
     crossings_scores: Path | None = None, failures_scores: Path | None = None,
@@ -138,7 +150,9 @@ def build_inflections_report(
     if failures_csv and failures_csv.exists():
         failures = _merge_scores(pd.read_csv(failures_csv), failures_scores)
 
-    all_tickers = sorted(set(crossings.get("ticker", [])) | set(failures.get("ticker", [])))
+    snapshots = _load_snapshots(crossings_csv) if page == "depressed" and crossings_csv else []
+    snapshot_tickers = {t for snap in snapshots for t in (r["ticker"] for r in snap["rows"])}
+    all_tickers = sorted(set(crossings.get("ticker", [])) | set(failures.get("ticker", [])) | snapshot_tickers)
     print(f"Building price series and fundamentals for {len(all_tickers)} tickers...", file=sys.stderr)
     series, since = {}, {}
     for t in all_tickers:
@@ -151,10 +165,13 @@ def build_inflections_report(
     if not crossings.empty and page == "inflections":
         _add_rise_columns(crossings, series, fund, data_dir)
 
+    spy = load_etf_series("SPY", data_dir / "sector")
     research = {t: r for t in all_tickers if (r := load_research(t, data_dir)) and "skipped" not in r}
     payload = {
         "page": page,
+        "benchmark": {"name": "S&P 500 (SPY)", **spy} if spy else {},
         "params": load_params(crossings_csv) if page == "depressed" and crossings_csv else {},
+        "snapshots": snapshots,
         "research": research,
         "crossings": json.loads(crossings.to_json(orient="records")),
         "failures": json.loads(failures.to_json(orient="records")),
