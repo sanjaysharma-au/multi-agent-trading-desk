@@ -171,7 +171,8 @@ def run_research(ticker: str, data_dir: Path, results_dir: Path, model: str = "s
     cmd = ["claude", "-p", _prompt(facts), "--output-format", "json", "--model", model,
            "--system-prompt", SYSTEM_PROMPT, "--restricted",
            "--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit",
-           "--allowedTools", *ALLOWED_TOOLS, "--permission-prompts", "none"]
+           "--allowedTools", *ALLOWED_TOOLS, "--permission-prompts", "none",
+           "--no-session-persistence"]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "claude CLI failed")

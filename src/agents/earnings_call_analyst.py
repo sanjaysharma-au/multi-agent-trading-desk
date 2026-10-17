@@ -157,6 +157,7 @@ def _call_claude(system_prompt: str, user_input: str, model: str = DEFAULT_MODEL
                     "--restricted",
                     "--disallowedTools", "Bash", "Edit", "Write", "NotebookEdit",
                     "--permission-prompts", "none",
+                    "--no-session-persistence",
                 ],
                 capture_output=True,
                 text=True,
