@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +13,17 @@ SCREENER_BIN = REPO_ROOT / "tools" / "stock-screener" / ".venv" / "bin" / "moons
 LOG_DIR = REPO_ROOT / "logs" / "crossing_queue"
 STATE_PATH = LOG_DIR / "state.json"
 PRIORITY_PATH = LOG_DIR / "priority.txt"
+SCREENER_DATA = REPO_ROOT / "tools" / "stock-screener" / "data"
+NO_TRANSCRIPTS = "no transcripts on disk"
 LOCK_PATH = LOG_DIR / "queue.lock"
+
+# Infrastructure noise worth retrying on a cooldown rather than burning a real attempt: a transient
+# API hiccup (NVIDIA/Nemotron timeout, a dropped connection, Claude's usage limit) looks identical in
+# the log to a real per-ticker problem, so it is told apart only by matching known error text.
+TRANSIENT_PATTERNS = ("Read timed out", "ConnectionError", "ChunkedEncodingError",
+                      "session limit", "usage limit", "hit your limit", "rate limit", "Service Unavailable", "temporarily unavailable")
+MAX_TRANSIENT_RETRIES = 6
+TRANSIENT_BACKOFF_MINUTES = 5
 
 PIPELINE_ARGS = [
     "--backend", "nemotron", "--ledger-backend", "nemotron",
@@ -47,9 +57,19 @@ def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=1, sort_keys=True))
 
 
+def on_cooldown(entry: dict) -> bool:
+    retry_after = entry.get("retry_after")
+    return bool(retry_after and datetime.fromisoformat(retry_after) > datetime.now())
+
+
 def pending(tickers: list[str], state: dict, max_attempts: int) -> list[str]:
     return [t for t in tickers
-            if not state.get(t, {}).get("complete") and state.get(t, {}).get("attempts", 0) < max_attempts]
+            if not state.get(t, {}).get("complete") and state.get(t, {}).get("attempts", 0) < max_attempts
+            and not on_cooldown(state.get(t, {}))]
+
+
+def classify_transient(log_tail: str) -> str | None:
+    return next((p for p in TRANSIENT_PATTERNS if p in log_tail), None)
 
 
 def priority_tickers() -> list[str]:
@@ -68,6 +88,16 @@ def next_ticker(queues: dict[str, list[str]], state: dict, turn: str, max_attemp
                 continue
             return page, ticker
     return None
+
+
+def run_without_transcripts(ticker: str) -> bool:
+    """For a company with no earnings-call transcripts: skip the transcript steps but still build its
+    price-to-sales history and its web research, which do not need them."""
+    for command in (["valuation", ticker], ["why", ticker]):
+        subprocess.run([str(SCREENER_BIN), *command], cwd=REPO_ROOT, capture_output=True)
+    research = SCREENER_DATA / "research" / f"{ticker}.json"
+    return (SCREENER_DATA / "valuation" / f"{ticker}.json").exists() and research.exists() \
+        and "skipped" not in json.loads(research.read_text())
 
 
 def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
@@ -90,6 +120,24 @@ def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
             rc = -1
     entry["last_exit"] = rc
     entry["complete"] = rc == 0 and is_complete(ticker)
+    tail = log_path.read_text()[-3000:] if not entry["complete"] else ""
+    if not entry["complete"] and rc > 0 and NO_TRANSCRIPTS in tail:
+        entry["note"] = "no transcripts available; valuation and research only"
+        entry["complete"] = run_without_transcripts(ticker)
+    elif not entry["complete"]:
+        reason = classify_transient(tail)
+        transient_failures = entry.get("transient_failures", 0)
+        if reason and transient_failures < MAX_TRANSIENT_RETRIES:
+            entry["attempts"] -= 1
+            entry["transient_failures"] = transient_failures + 1
+            backoff = TRANSIENT_BACKOFF_MINUTES * (2 ** transient_failures)
+            entry["retry_after"] = (datetime.now() + timedelta(minutes=backoff)).isoformat(timespec="seconds")
+            entry["note"] = f"transient failure ({reason!r}); retrying in {backoff} min, not counted as an attempt"
+        elif reason:
+            entry["note"] = f"gave up after {MAX_TRANSIENT_RETRIES} transient failures ({reason!r})"
+    if entry["complete"]:
+        entry.pop("transient_failures", None)
+        entry.pop("retry_after", None)
     save_state(state)
     elapsed = time.monotonic() - started
     print(f"{ticker}: {'complete' if entry['complete'] else f'incomplete (exit {rc}, attempt {entry['attempts']})'} "
@@ -100,14 +148,11 @@ def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the moonshot pipeline for the next unfinished crossing, most recent crossing first. "
-        "Meant to be run by a timer, one ticker per run."
+        "Meant to be run by a timer; keeps going until the queue is empty or a transient failure puts a ticker on cooldown."
     )
     parser.add_argument("--max-attempts", type=int, default=2,
                         help="give up on a ticker after this many failed runs (default 2)")
     parser.add_argument("--timeout-hours", type=float, default=6.0, help="kill a single ticker's run after this long")
-    parser.add_argument("--fast-minutes", type=float, default=10.0,
-                        help="after a ticker completes in under this many minutes, run the next one straight away "
-                        "instead of waiting for the next timer (default 10; 0 disables)")
     parser.add_argument("--ticker", help="run this ticker instead of the next one in the queue")
     parser.add_argument("--prioritize", help="comma-separated tickers to run before everything else, in this order "
                         "(replaces the current priority list; empty string clears it)")
@@ -156,10 +201,9 @@ def main() -> None:
             if page != "priority":
                 state[META_KEY] = {"next_queue": QUEUES[(QUEUES.index(page) + 1) % len(QUEUES)]}
             print(f"[{page}] ", end="", flush=True)
-            elapsed = run_ticker(ticker, state, args.timeout_hours)
-            if state[ticker]["complete"] and elapsed < args.fast_minutes * 60:
-                continue
-            return
+            run_ticker(ticker, state, args.timeout_hours)
+            if not state[ticker]["complete"] and on_cooldown(state[ticker]):
+                return
 
 
 if __name__ == "__main__":

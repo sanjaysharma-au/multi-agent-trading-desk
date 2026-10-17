@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OUTPUT_DIR = Path("earnings_call_analysis")
-DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 DEFAULT_BACKEND = "nemotron"  # "nemotron" or "claude"
 CLAUDE_TIMEOUT_SECONDS = 600
 MAX_ATTEMPTS = 3
