@@ -57,6 +57,18 @@ def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=1, sort_keys=True))
 
 
+def save_entry(state: dict, key: str, entry: dict) -> None:
+    """Writes just one key, re-reading the file first rather than dumping the whole in-memory
+    `state`: a long-running chain's own copy of *other* entries can go stale while it works through
+    many tickers back to back, and a plain `save_state(state)` would silently overwrite a concurrent
+    out-of-band edit (e.g. `--retry-failed` run against a stuck ticker while the chain is still going)
+    the next time this process persists anything at all."""
+    state[key] = entry
+    fresh = load_state()
+    fresh[key] = entry
+    save_state(fresh)
+
+
 def on_cooldown(entry: dict) -> bool:
     retry_after = entry.get("retry_after")
     return bool(retry_after and datetime.fromisoformat(retry_after) > datetime.now())
@@ -83,8 +95,9 @@ def next_ticker(queues: dict[str, list[str]], state: dict, turn: str, max_attemp
     for page, tickers in [("priority", priority_tickers())] + [(q, queues[q]) for q in order]:
         for ticker in pending(tickers, state, max_attempts):
             if is_complete(ticker):
-                state.setdefault(ticker, {"attempts": 0})["complete"] = True
-                save_state(state)
+                entry = state.setdefault(ticker, {"attempts": 0})
+                entry["complete"] = True
+                save_entry(state, ticker, entry)
                 continue
             return page, ticker
     return None
@@ -109,7 +122,7 @@ def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
     entry["attempts"] += 1
     entry["last_started"] = datetime.now().isoformat(timespec="seconds")
     entry["last_log"] = str(log_path)
-    save_state(state)
+    save_entry(state, ticker, entry)
     cmd = [sys.executable, str(PIPELINE), ticker, *PIPELINE_ARGS]
     print(f"running {ticker}: {' '.join(cmd)}\nlog: {log_path}", flush=True)
     with log_path.open("w") as log:
@@ -138,7 +151,7 @@ def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
     if entry["complete"]:
         entry.pop("transient_failures", None)
         entry.pop("retry_after", None)
-    save_state(state)
+    save_entry(state, ticker, entry)
     elapsed = time.monotonic() - started
     print(f"{ticker}: {'complete' if entry['complete'] else f'incomplete (exit {rc}, attempt {entry['attempts']})'} "
           f"in {elapsed / 60:.1f} min", flush=True)
@@ -192,6 +205,11 @@ def main() -> None:
             run_ticker(args.ticker.upper(), state, args.timeout_hours)
             return
         while True:
+            # Reloaded every iteration (not just once before the loop): this loop can run for a
+            # long time back to back, and without this an out-of-band edit made while it's running
+            # (e.g. `--retry-failed` for a stuck ticker) would be silently lost the next time this
+            # loop's own stale in-memory copy gets written back over it.
+            state = load_state()
             turn = state.get(META_KEY, {}).get("next_queue", QUEUES[0])
             pick = next_ticker(queues, state, turn, args.max_attempts)
             if pick is None:
@@ -200,6 +218,7 @@ def main() -> None:
             page, ticker = pick
             if page != "priority":
                 state[META_KEY] = {"next_queue": QUEUES[(QUEUES.index(page) + 1) % len(QUEUES)]}
+                save_entry(state, META_KEY, state[META_KEY])
             print(f"[{page}] ", end="", flush=True)
             run_ticker(ticker, state, args.timeout_hours)
             if not state[ticker]["complete"] and on_cooldown(state[ticker]):
