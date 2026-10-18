@@ -308,8 +308,10 @@ def _call_nemotron(
         try:
             raw_text, finish_reason = _stream_completion(url, headers, payload, label=label)
             text = _strip_reasoning(raw_text)
-            if not text:
-                raise RuntimeError(f"NIM returned an empty completion (finish_reason={finish_reason})")
+            # Checked before the empty-text case below: a reasoning model can spend the whole
+            # token budget on reasoning_content and hit the length cap before writing any content
+            # at all, which looks identical to a genuinely empty completion but needs a bigger
+            # budget, not a plain retry at the same size.
             if finish_reason == "length":
                 if max_tokens >= NIM_MAX_TOKENS_CEILING:
                     raise RuntimeError(
@@ -318,6 +320,8 @@ def _call_nemotron(
                     )
                 max_tokens = min(max_tokens * 2, NIM_MAX_TOKENS_CEILING)
                 raise RuntimeError(f"NIM truncated the completion (finish_reason=length), retrying with max_tokens={max_tokens}")
+            if not text:
+                raise RuntimeError(f"NIM returned an empty completion (finish_reason={finish_reason})")
             return text
         except (requests.Timeout, requests.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
             last_error = e
