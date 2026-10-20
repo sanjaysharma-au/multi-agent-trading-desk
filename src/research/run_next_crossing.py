@@ -20,8 +20,14 @@ LOCK_PATH = LOG_DIR / "queue.lock"
 # Infrastructure noise worth retrying on a cooldown rather than burning a real attempt: a transient
 # API hiccup (NVIDIA/Nemotron timeout, a dropped connection, Claude's usage limit) looks identical in
 # the log to a real per-ticker problem, so it is told apart only by matching known error text.
+#
+# "NIM request failed (HTTP 404)" looks like a dead/retired model at first (a 404 for a specific
+# backing function id), but has been observed clearing on its own within hours and hitting other,
+# unrelated models at the same time -- rolling instability in NVIDIA's NIM hosting, not a permanent
+# per-model retirement. A real retirement needs a DEFAULT_MODEL change, not a longer cooldown here.
 TRANSIENT_PATTERNS = ("Read timed out", "ConnectionError", "ChunkedEncodingError",
-                      "session limit", "usage limit", "hit your limit", "rate limit", "Service Unavailable", "temporarily unavailable")
+                      "session limit", "usage limit", "hit your limit", "rate limit", "Service Unavailable",
+                      "temporarily unavailable", "NIM request failed (HTTP 404)")
 MAX_TRANSIENT_RETRIES = 6
 TRANSIENT_BACKOFF_MINUTES = 5
 
