@@ -18,23 +18,21 @@ NO_TRANSCRIPTS = "no transcripts on disk"
 LOCK_PATH = LOG_DIR / "queue.lock"
 
 # Infrastructure noise worth retrying on a cooldown rather than burning a real attempt: a transient
-# API hiccup (NVIDIA/Nemotron timeout, a dropped connection, Claude's usage limit) looks identical in
-# the log to a real per-ticker problem, so it is told apart only by matching known error text.
-#
-# "NIM request failed (HTTP 404)" looks like a dead/retired model at first (a 404 for a specific
-# backing function id), but has been observed clearing on its own within hours and hitting other,
-# unrelated models at the same time -- rolling instability in NVIDIA's NIM hosting, not a permanent
-# per-model retirement. A real retirement needs a DEFAULT_MODEL change, not a longer cooldown here.
+# API hiccup (a timeout, a dropped connection, Claude's usage limit) looks identical in the log to a
+# real per-ticker problem, so it is told apart only by matching known error text.
 TRANSIENT_PATTERNS = ("Read timed out", "ConnectionError", "ChunkedEncodingError",
                       "session limit", "usage limit", "hit your limit", "rate limit", "Service Unavailable",
-                      "temporarily unavailable", "NIM request failed (HTTP 404)")
+                      "temporarily unavailable")
 MAX_TRANSIENT_RETRIES = 6
 TRANSIENT_BACKOFF_MINUTES = 5
 
-PIPELINE_ARGS = [
-    "--backend", "nemotron", "--ledger-backend", "nemotron",
-    "--score-backend", "claude", "--score-model", "haiku",
-]
+
+def pipeline_args(model: str) -> list[str]:
+    return [
+        "--backend", "claude", "--model", model,
+        "--ledger-backend", "claude", "--ledger-model", model,
+        "--score-backend", "claude", "--score-model", model,
+    ]
 
 
 QUEUES = ["inflections", "depressed"]
@@ -119,7 +117,7 @@ def run_without_transcripts(ticker: str) -> bool:
         and "skipped" not in json.loads(research.read_text())
 
 
-def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
+def run_ticker(ticker: str, state: dict, timeout_hours: float, model: str) -> float:
     """Runs the pipeline for one ticker and returns how many seconds it took."""
     started = time.monotonic()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -129,7 +127,7 @@ def run_ticker(ticker: str, state: dict, timeout_hours: float) -> float:
     entry["last_started"] = datetime.now().isoformat(timespec="seconds")
     entry["last_log"] = str(log_path)
     save_entry(state, ticker, entry)
-    cmd = [sys.executable, str(PIPELINE), ticker, *PIPELINE_ARGS]
+    cmd = [sys.executable, str(PIPELINE), ticker, *pipeline_args(model)]
     print(f"running {ticker}: {' '.join(cmd)}\nlog: {log_path}", flush=True)
     with log_path.open("w") as log:
         try:
@@ -172,6 +170,7 @@ def main() -> None:
     parser.add_argument("--max-attempts", type=int, default=2,
                         help="give up on a ticker after this many failed runs (default 2)")
     parser.add_argument("--timeout-hours", type=float, default=6.0, help="kill a single ticker's run after this long")
+    parser.add_argument("--model", help="Claude model for analysis, ledger extraction and scoring (e.g. sonnet, haiku)")
     parser.add_argument("--ticker", help="run this ticker instead of the next one in the queue")
     parser.add_argument("--prioritize", help="comma-separated tickers to run before everything else, in this order "
                         "(replaces the current priority list; empty string clears it)")
@@ -192,6 +191,9 @@ def main() -> None:
         print(f"priority list: {priority_tickers() or 'cleared'}")
         return
 
+    if not args.model:
+        parser.error("--model is required to run the pipeline")
+
     queues = {page: queue_tickers(page) for page in QUEUES}
     if args.list:
         todo = pending(priority_tickers(), state, args.max_attempts)
@@ -208,7 +210,7 @@ def main() -> None:
             print("another run is still in progress; exiting")
             return
         if args.ticker:
-            run_ticker(args.ticker.upper(), state, args.timeout_hours)
+            run_ticker(args.ticker.upper(), state, args.timeout_hours, args.model)
             return
         while True:
             # Reloaded every iteration (not just once before the loop): this loop can run for a
@@ -226,7 +228,7 @@ def main() -> None:
                 state[META_KEY] = {"next_queue": QUEUES[(QUEUES.index(page) + 1) % len(QUEUES)]}
                 save_entry(state, META_KEY, state[META_KEY])
             print(f"[{page}] ", end="", flush=True)
-            run_ticker(ticker, state, args.timeout_hours)
+            run_ticker(ticker, state, args.timeout_hours, args.model)
             if not state[ticker]["complete"] and on_cooldown(state[ticker]):
                 return
 
