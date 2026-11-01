@@ -191,9 +191,6 @@ def main() -> None:
         print(f"priority list: {priority_tickers() or 'cleared'}")
         return
 
-    if not args.model:
-        parser.error("--model is required to run the pipeline")
-
     queues = {page: queue_tickers(page) for page in QUEUES}
     if args.list:
         todo = pending(priority_tickers(), state, args.max_attempts)
@@ -202,6 +199,9 @@ def main() -> None:
             todo = pending(queues[page], state, args.max_attempts)
             print(f"{page}: {len(todo)} pending" + (f", next: {', '.join(todo[:5])}" if todo else ""))
         return
+
+    if not args.model:
+        parser.error("--model is required to run the pipeline")
 
     with LOCK_PATH.open("w") as lock:
         try:
