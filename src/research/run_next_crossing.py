@@ -27,11 +27,10 @@ MAX_TRANSIENT_RETRIES = 6
 TRANSIENT_BACKOFF_MINUTES = 5
 
 
-def pipeline_args(model: str) -> list[str]:
+def pipeline_args(score_model: str) -> list[str]:
     return [
-        "--backend", "claude", "--model", model,
-        "--ledger-backend", "claude", "--ledger-model", model,
-        "--score-backend", "claude", "--score-model", model,
+        "--backend", "nemotron", "--ledger-backend", "nemotron",
+        "--score-backend", "claude", "--score-model", score_model,
     ]
 
 
@@ -170,7 +169,7 @@ def main() -> None:
     parser.add_argument("--max-attempts", type=int, default=2,
                         help="give up on a ticker after this many failed runs (default 2)")
     parser.add_argument("--timeout-hours", type=float, default=6.0, help="kill a single ticker's run after this long")
-    parser.add_argument("--model", help="Claude model for analysis, ledger extraction and scoring (e.g. sonnet, haiku)")
+    parser.add_argument("--model", help="Claude model for the scoring step (e.g. haiku, sonnet); analysis and ledger extraction use the default Nemotron model")
     parser.add_argument("--ticker", help="run this ticker instead of the next one in the queue")
     parser.add_argument("--prioritize", help="comma-separated tickers to run before everything else, in this order "
                         "(replaces the current priority list; empty string clears it)")
